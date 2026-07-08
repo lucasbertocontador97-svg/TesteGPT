@@ -174,6 +174,10 @@ async def suggest_market_without_odds(
         "rules": [
             "Escolha o mercado pelo momento do jogo, sem ver odds.",
             "Se nao houver leitura clara, responda should_check_odds=false.",
+            "Se estatisticas detalhadas estiverem vazias ou insuficientes, responda should_check_odds=false.",
+            "Nao baseie entrada apenas no placar.",
+            "Evite amistosos, categorias de base, reservas ou jogos femininos se os dados forem fracos.",
+            "Antes dos 25 minutos, seja muito conservador; so sugira entrada com pressao estatistica clara.",
             "Se escolher mercado, line e obrigatorio.",
             "A linha deve ser coerente com placar, tempo, escanteios e estatisticas do jogo.",
             "Explique citando dados concretos das estatisticas recebidas quando existirem.",

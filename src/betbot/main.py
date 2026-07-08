@@ -15,7 +15,7 @@ from .markets import flatten_all_markets, flatten_markets, market_matches_idea
 from .matching import find_matching_odds_event
 from .models import Decision, GameSnapshot
 from .settlement import settle_alert
-from .stats import compact_statistics, compact_stats_summary, extract_minute, extract_score
+from .stats import compact_statistics, compact_stats_summary, extract_minute, extract_score, has_actionable_stats, is_high_variance_match
 from .storage import Storage
 from .telegram_io import format_alert, send_message
 
@@ -84,11 +84,19 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
         api_football = ApiFootballClient(settings.api_football_key, http)
         sent = 0
         for game in await build_snapshots(settings, odds_api, api_football):
+            if not has_actionable_stats(game.stats):
+                logger.info("Sem estatisticas suficientes para %s x %s.", game.home, game.away)
+                continue
+            required_confidence = settings.min_confidence
+            if is_high_variance_match(game.league, game.home, game.away):
+                required_confidence = max(required_confidence, 85)
+            if game.minute is not None and game.minute < 25:
+                required_confidence = max(required_confidence, 85)
             idea = await suggest_market_without_odds(
                 game,
                 api_key=settings.openai_api_key,
                 model=settings.openai_model,
-                min_confidence=settings.min_confidence,
+                min_confidence=required_confidence,
             )
             if not idea.should_check_odds:
                 logger.info("IA nao pediu odds: %s x %s - %s", game.home, game.away, idea.reason)
@@ -354,11 +362,22 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 stats=stats,
                 markets=[],
             )
+            if not has_actionable_stats(game.stats):
+                logger.info("Pulando %s x %s: estatisticas detalhadas insuficientes.", game.home, game.away)
+                continue
+            required_confidence = settings.min_confidence
+            caution_notes = []
+            if is_high_variance_match(game.league, game.home, game.away):
+                required_confidence = max(required_confidence, 85)
+                caution_notes.append("jogo de maior variancia")
+            if game.minute is not None and game.minute < 25:
+                required_confidence = max(required_confidence, 85)
+                caution_notes.append("jogo muito cedo")
             idea = await suggest_market_without_odds(
                 game,
                 api_key=settings.openai_api_key,
                 model=settings.openai_model,
-                min_confidence=settings.min_confidence,
+                min_confidence=required_confidence,
             )
             if not idea.should_check_odds:
                 logger.info("Sem entrada sem odds: %s x %s - %s", game.home, game.away, idea.reason)
@@ -401,13 +420,17 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"Mercado indicado: {market_label}{line_label}\n"
                 f"Direcao: {idea.selection}\n"
                 f"Confianca: {idea.confidence}%\n"
-                f"Stake: {idea.stake}\n\n"
+                f"Stake: {idea.stake}\n"
+                f"Filtro aplicado: confianca minima {required_confidence}%"
+                f"{' (' + ', '.join(caution_notes) + ')' if caution_notes else ''}\n\n"
                 f"Estatisticas usadas:\n{compact_stats_summary(game.stats)}\n\n"
                 f"Motivo: {idea.reason}"
             )
             return
 
-        await update.message.reply_text("A IA analisou os jogos ao vivo, mas nao encontrou entrada oficial sem odds com confianca suficiente.")
+        await update.message.reply_text(
+            "Nao enviei entrada oficial: os jogos ao vivo nao tinham estatisticas suficientes ou confianca minima para apostar com criterio."
+        )
     except httpx.HTTPStatusError as exc:
         logger.warning("Erro HTTP na entrada sem odds: %s", exc.response.status_code)
         await update.message.reply_text(f"Erro HTTP na entrada sem odds: {exc.response.status_code}")

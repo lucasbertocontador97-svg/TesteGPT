@@ -82,3 +82,30 @@ def compact_stats_summary(stats: dict[str, Any]) -> str:
             pieces.append(f"ataques perigosos {dangerous}")
         lines.append(f"{team}: " + (", ".join(pieces) if pieces else "sem estatisticas principais"))
     return "\n".join(lines)
+
+
+def has_actionable_stats(stats: dict[str, Any]) -> bool:
+    if not stats:
+        return False
+    important = {
+        "shots on goal",
+        "shots on target",
+        "total shots",
+        "corner kicks",
+        "corners",
+        "dangerous attacks",
+        "attacks",
+        "ball possession",
+    }
+    found = 0
+    for team_stats in stats.values():
+        for key, value in team_stats.items():
+            if str(key).lower() in important and value not in (None, "", "0%"):
+                found += 1
+    return found >= 3
+
+
+def is_high_variance_match(league: str, home: str, away: str) -> bool:
+    text = f"{league} {home} {away}".lower()
+    markers = ("friendly", "friendlies", "amistoso", "u20", "u19", "u21", "u23", "reserves", "women")
+    return any(marker in text for marker in markers)
