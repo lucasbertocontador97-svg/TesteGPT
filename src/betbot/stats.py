@@ -65,6 +65,34 @@ def compact_player_statistics(players_response: list[dict[str, Any]]) -> dict[st
     return result
 
 
+def _thestatsapi_pair(section: dict[str, Any], key: str) -> tuple[Any, Any]:
+    value = section.get(key, {})
+    all_value = value.get("all", {}) if isinstance(value, dict) else {}
+    return all_value.get("home"), all_value.get("away")
+
+
+def compact_thestatsapi_statistics(match: dict[str, Any], stats_response: dict[str, Any]) -> dict[str, Any]:
+    home = match.get("home_team", {}).get("name", "home") if isinstance(match.get("home_team"), dict) else "home"
+    away = match.get("away_team", {}).get("name", "away") if isinstance(match.get("away_team"), dict) else "away"
+    overview = stats_response.get("overview", {}) if isinstance(stats_response.get("overview"), dict) else {}
+    mapping = {
+        "ball_possession": "Ball Possession",
+        "total_shots": "Total Shots",
+        "shots_on_target": "Shots on Goal",
+        "corner_kicks": "Corner Kicks",
+        "expected_goals": "Expected Goals",
+        "big_chances": "Big Chances",
+    }
+    result = {home: {}, away: {}}
+    for source, target in mapping.items():
+        home_value, away_value = _thestatsapi_pair(overview, source)
+        if home_value is not None:
+            result[home][target] = home_value
+        if away_value is not None:
+            result[away][target] = away_value
+    return {team: values for team, values in result.items() if values}
+
+
 SPORTMONKS_TYPE_ID_MAP = {
     34: "Corner Kicks",
     41: "Shots off Goal",

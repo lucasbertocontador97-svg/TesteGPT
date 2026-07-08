@@ -22,6 +22,7 @@ MVP em Python para monitorar jogos ao vivo, buscar odds na Odds-API.io, buscar e
 - Tem comando `/debug_live_filters` para ver por que jogos ao vivo foram bloqueados.
 - Tem comando `/debug_sportmonks` para ver se a Sportmonks esta retornando jogos e estatisticas.
 - Tem comando `/debug_api_football_stats` para ver o retorno bruto resumido da API-Football.
+- Tem comando `/debug_thestatsapi` para testar autenticação, jogos live e cobertura da TheStatsAPI.
 - Tem comando `/envcheck` para conferir quais variaveis o deploy esta enxergando.
 - Tenta liquidar entradas de gols e escanteios quando houver dados finais suficientes.
 - Inclui documentacao oficial do EdgeBot AI em `docs/`.

@@ -180,3 +180,57 @@ class SportmonksClient:
                 }
             )
         return results
+
+
+class TheStatsApiClient:
+    base_url = "https://api.thestatsapi.com/api"
+
+    def __init__(self, api_key: str, http: HttpJsonClient) -> None:
+        self.api_key = api_key
+        self.http = http
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}"}
+
+    async def live_matches(self, limit: int = 100) -> list[dict[str, Any]]:
+        data = await self.http.get_json(
+            f"{self.base_url}/football/matches",
+            params={"status": "live", "per_page": min(limit, 100)},
+            headers=self.headers,
+        )
+        return data.get("data", []) if isinstance(data, dict) else []
+
+    async def match_stats(self, match_id: str) -> dict[str, Any] | None:
+        data = await self.http.get_json(
+            f"{self.base_url}/football/matches/{match_id}/stats",
+            headers=self.headers,
+        )
+        stats = data.get("data") if isinstance(data, dict) else None
+        return stats if isinstance(stats, dict) else None
+
+    async def diagnostic(self) -> list[dict[str, Any]]:
+        checks = [
+            ("health", f"{self.base_url}/health", {}),
+            ("football live matches", f"{self.base_url}/football/matches", {"status": "live", "per_page": 20}),
+        ]
+        results = []
+        for label, url, params in checks:
+            status, data = await self.http.get_status_json(url, params=params, headers=self.headers)
+            items = data.get("data", []) if isinstance(data, dict) else []
+            message = ""
+            if isinstance(data, dict):
+                error = data.get("error")
+                if isinstance(error, dict):
+                    message = str(error.get("message") or error.get("code") or "")
+                else:
+                    message = str(data.get("message") or "")
+            results.append(
+                {
+                    "label": label,
+                    "status": status,
+                    "count": len(items) if isinstance(items, list) else (1 if data else 0),
+                    "message": message[:300],
+                }
+            )
+        return results

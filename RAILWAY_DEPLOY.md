@@ -20,6 +20,7 @@ TELEGRAM_CHAT_ID=
 ODDS_API_KEY=
 API_FOOTBALL_KEY=
 SPORTMONKS_API_TOKEN=
+THESTATSAPI_KEY=
 OPENAI_API_KEY=
 DRY_RUN=false
 POLL_SECONDS=180
@@ -71,6 +72,7 @@ No Telegram, teste:
 /debug_live_filters
 /debug_sportmonks
 /debug_api_football_stats
+/debug_thestatsapi
 /envcheck
 ```
 

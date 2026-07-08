@@ -83,3 +83,21 @@ def find_matching_sportmonks_fixture(api_football_fixture: dict[str, Any], sport
         if score > best[0]:
             best = (score, fixture)
     return best[1] if best[0] >= 0.70 else None
+
+
+def find_matching_thestatsapi_match(api_football_fixture: dict[str, Any], matches: list[dict[str, Any]]) -> dict[str, Any] | None:
+    teams = api_football_fixture.get("teams", {})
+    home = teams.get("home", {}).get("name", "")
+    away = teams.get("away", {}).get("name", "")
+    best: tuple[float, dict[str, Any] | None] = (0.0, None)
+    for match in matches:
+        home_team = match.get("home_team", {}) if isinstance(match.get("home_team"), dict) else {}
+        away_team = match.get("away_team", {}) if isinstance(match.get("away_team"), dict) else {}
+        ts_home = home_team.get("name", "")
+        ts_away = away_team.get("name", "")
+        direct = (similarity(home, ts_home) + similarity(away, ts_away)) / 2
+        swapped = (similarity(home, ts_away) + similarity(away, ts_home)) / 2
+        score = max(direct, swapped)
+        if score > best[0]:
+            best = (score, match)
+    return best[1] if best[0] >= 0.70 else None

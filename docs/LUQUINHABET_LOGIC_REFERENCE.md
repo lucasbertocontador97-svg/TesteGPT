@@ -36,4 +36,4 @@ O arquivo `src/betbot/deterministic.py` contem o primeiro motor matematico:
 
 Este motor nao substitui a IA. Ele funciona como porteiro: se a matematica nao aprova, a IA nao gera entrada oficial.
 
-Sportmonks foi integrado como fonte preferencial/fallback de estatisticas ao vivo quando a API-Football nao entrega estatisticas acionaveis.
+Sportmonks e TheStatsAPI foram integradas como fontes preferenciais/fallback de estatisticas ao vivo quando a API-Football nao entrega estatisticas acionaveis.

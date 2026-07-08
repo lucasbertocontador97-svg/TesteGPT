@@ -10,14 +10,14 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
-from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient
+from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
 from .markets import flatten_all_markets, flatten_markets, market_matches_idea
-from .matching import find_matching_odds_event, find_matching_sportmonks_fixture, sportmonks_participant_names
+from .matching import find_matching_odds_event, find_matching_sportmonks_fixture, find_matching_thestatsapi_match, sportmonks_participant_names
 from .models import Decision, GameSnapshot
 from .settlement import settle_alert
-from .stats import compact_player_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, extract_minute, extract_score, has_actionable_stats, is_high_variance_match
+from .stats import compact_player_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, compact_thestatsapi_statistics, extract_minute, extract_score, has_actionable_stats, is_high_variance_match
 from .storage import Storage
 from .telegram_io import format_alert, send_message
 
@@ -38,10 +38,26 @@ async def load_sportmonks_live(settings, http: HttpJsonClient) -> list[dict]:
         return []
 
 
+async def load_thestatsapi_live(settings, http: HttpJsonClient) -> list[dict]:
+    if not settings.thestatsapi_key:
+        return []
+    try:
+        return await TheStatsApiClient(settings.thestatsapi_key, http).live_matches(settings.max_live_events)
+    except httpx.HTTPStatusError as exc:
+        logger.warning("TheStatsAPI live matches falhou com HTTP %s.", exc.response.status_code)
+        return []
+
+
 def make_sportmonks_client(settings, http: HttpJsonClient) -> SportmonksClient | None:
     if not settings.sportmonks_api_token:
         return None
     return SportmonksClient(settings.sportmonks_api_token, http)
+
+
+def make_thestatsapi_client(settings, http: HttpJsonClient) -> TheStatsApiClient | None:
+    if not settings.thestatsapi_key:
+        return None
+    return TheStatsApiClient(settings.thestatsapi_key, http)
 
 
 async def fixture_stats_with_sportmonks_fallback(
@@ -49,6 +65,8 @@ async def fixture_stats_with_sportmonks_fallback(
     api_football: ApiFootballClient,
     sportmonks_live: list[dict],
     sportmonks_client: SportmonksClient | None = None,
+    thestatsapi_live: list[dict] | None = None,
+    thestatsapi_client: TheStatsApiClient | None = None,
 ) -> dict:
     fixture_id = fixture.get("fixture", {}).get("id")
     api_stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id))) if fixture_id else {}
@@ -67,7 +85,18 @@ async def fixture_stats_with_sportmonks_fallback(
     if has_actionable_stats(api_stats):
         return api_stats
     player_stats = compact_player_statistics(await api_football.fixture_players(int(fixture_id))) if fixture_id else {}
-    return player_stats if has_actionable_stats(player_stats) else api_stats
+    if has_actionable_stats(player_stats):
+        return player_stats
+    ts_match = find_matching_thestatsapi_match(fixture, thestatsapi_live or []) if thestatsapi_live else None
+    if ts_match and thestatsapi_client:
+        try:
+            ts_stats_raw = await thestatsapi_client.match_stats(str(ts_match.get("id")))
+            ts_stats = compact_thestatsapi_statistics(ts_match, ts_stats_raw or {})
+            if has_actionable_stats(ts_stats):
+                return ts_stats
+        except httpx.HTTPStatusError as exc:
+            logger.warning("TheStatsAPI match stats falhou com HTTP %s.", exc.response.status_code)
+    return api_stats
 
 
 async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFootballClient) -> list[GameSnapshot]:
@@ -79,6 +108,8 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
     odds_events = await odds_api.live_events(settings.sport, settings.max_live_events)
     sportmonks_live = await load_sportmonks_live(settings, odds_api.http)
     sportmonks_client = make_sportmonks_client(settings, odds_api.http)
+    thestatsapi_live = await load_thestatsapi_live(settings, odds_api.http)
+    thestatsapi_client = make_thestatsapi_client(settings, odds_api.http)
     matched_pairs: list[tuple[dict, dict]] = []
     used_event_ids: set[str] = set()
     for fixture in football_fixtures:
@@ -100,7 +131,9 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
     for fixture, event in matched_pairs:
         event_id = str(event.get("id") or "")
         fixture_id = fixture.get("fixture", {}).get("id") if fixture else None
-        stats = await fixture_stats_with_sportmonks_fallback(fixture, api_football, sportmonks_live, sportmonks_client)
+        stats = await fixture_stats_with_sportmonks_fallback(
+            fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client
+        )
         score_home, score_away = extract_score(fixture)
         fixture_league = fixture.get("league", {}) if fixture else {}
         league = fixture_league.get("name") or (event.get("league", {}).get("name") if isinstance(event.get("league"), dict) else event.get("league", ""))
@@ -347,6 +380,8 @@ async def test_analysis_no_odds_cmd(update: Update, context: ContextTypes.DEFAUL
         api_football = ApiFootballClient(settings.api_football_key, http)
         sportmonks_live = await load_sportmonks_live(settings, http)
         sportmonks_client = make_sportmonks_client(settings, http)
+        thestatsapi_live = await load_thestatsapi_live(settings, http)
+        thestatsapi_client = make_thestatsapi_client(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
             await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
@@ -354,7 +389,9 @@ async def test_analysis_no_odds_cmd(update: Update, context: ContextTypes.DEFAUL
 
         fixture = fixtures[0]
         fixture_id = fixture.get("fixture", {}).get("id")
-        stats = await fixture_stats_with_sportmonks_fallback(fixture, api_football, sportmonks_live, sportmonks_client)
+        stats = await fixture_stats_with_sportmonks_fallback(
+            fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client
+        )
         score_home, score_away = extract_score(fixture)
         teams = fixture.get("teams", {})
         league = fixture.get("league", {}).get("name", "")
@@ -400,6 +437,8 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         api_football = ApiFootballClient(settings.api_football_key, http)
         sportmonks_live = await load_sportmonks_live(settings, http)
         sportmonks_client = make_sportmonks_client(settings, http)
+        thestatsapi_live = await load_thestatsapi_live(settings, http)
+        thestatsapi_client = make_thestatsapi_client(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
             await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
@@ -409,7 +448,9 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
             fixture_id = fixture.get("fixture", {}).get("id")
             if not fixture_id:
                 continue
-            stats = await fixture_stats_with_sportmonks_fallback(fixture, api_football, sportmonks_live, sportmonks_client)
+            stats = await fixture_stats_with_sportmonks_fallback(
+                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client
+            )
             score_home, score_away = extract_score(fixture)
             teams = fixture.get("teams", {})
             league = fixture.get("league", {}).get("name", "")
@@ -531,6 +572,8 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
         api_football = ApiFootballClient(settings.api_football_key, http)
         sportmonks_live = await load_sportmonks_live(settings, http)
         sportmonks_client = make_sportmonks_client(settings, http)
+        thestatsapi_live = await load_thestatsapi_live(settings, http)
+        thestatsapi_client = make_thestatsapi_client(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
             await update.message.reply_text("Nao ha jogos ao vivo agora na API-Football.")
@@ -541,7 +584,9 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
             fixture_id = fixture.get("fixture", {}).get("id")
             if not fixture_id:
                 continue
-            stats = await fixture_stats_with_sportmonks_fallback(fixture, api_football, sportmonks_live, sportmonks_client)
+            stats = await fixture_stats_with_sportmonks_fallback(
+                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client
+            )
             score_home, score_away = extract_score(fixture)
             teams = fixture.get("teams", {})
             league = fixture.get("league", {}).get("name", "")
@@ -647,12 +692,16 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
         api_football = ApiFootballClient(settings.api_football_key, http)
         sportmonks_live = await load_sportmonks_live(settings, http)
         sportmonks_client = make_sportmonks_client(settings, http)
+        thestatsapi_live = await load_thestatsapi_live(settings, http)
+        thestatsapi_client = make_thestatsapi_client(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
             await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
             return
 
-        lines = [f"Jogos ao vivo analisados: {min(len(fixtures), 10)} | Sportmonks live: {len(sportmonks_live)}"]
+        lines = [
+            f"Jogos ao vivo analisados: {min(len(fixtures), 10)} | Sportmonks live: {len(sportmonks_live)} | TheStatsAPI live: {len(thestatsapi_live)}"
+        ]
         for fixture in fixtures[:10]:
             fixture_id = fixture.get("fixture", {}).get("id")
             teams = fixture.get("teams", {})
@@ -664,7 +713,9 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
             if not fixture_id:
                 lines.append(f"- {home} x {away}: sem fixture_id")
                 continue
-            stats = await fixture_stats_with_sportmonks_fallback(fixture, api_football, sportmonks_live, sportmonks_client)
+            stats = await fixture_stats_with_sportmonks_fallback(
+                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client
+            )
             required_confidence = settings.min_confidence
             flags = []
             if is_high_variance_match(league, home, away):
@@ -695,6 +746,40 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as exc:
         logger.exception("Erro no diagnostico de filtros")
         await update.message.reply_text(f"Erro no diagnostico de filtros: {type(exc).__name__}")
+    finally:
+        await http.close()
+
+
+async def debug_thestatsapi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Diagnosticando TheStatsAPI...")
+        if not settings.thestatsapi_key:
+            await update.message.reply_text("THESTATSAPI_KEY ausente no Railway.")
+            return
+        client = TheStatsApiClient(settings.thestatsapi_key, http)
+        diagnostics = await client.diagnostic()
+        lines = ["Diagnostico TheStatsAPI:"]
+        for item in diagnostics:
+            suffix = f" | {item['message']}" if item["message"] else ""
+            lines.append(f"- {item['label']}: HTTP {item['status']} | itens={item['count']}{suffix}")
+        live = await client.live_matches(settings.max_live_events)
+        if live:
+            lines.append("\nJogos live retornados:")
+            for match in live[:8]:
+                home = match.get("home_team", {}).get("name", "?") if isinstance(match.get("home_team"), dict) else "?"
+                away = match.get("away_team", {}).get("name", "?") if isinstance(match.get("away_team"), dict) else "?"
+                status = match.get("status", "?")
+                stats_flag = "xG" if match.get("xg_available") else "sem xG"
+                lines.append(f"- {home} x {away} | {status} | {stats_flag} | id={match.get('id')}")
+        await update.message.reply_text("\n".join(lines)[:3900])
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Erro HTTP no diagnostico TheStatsAPI: %s", exc.response.status_code)
+        await update.message.reply_text(f"Erro HTTP TheStatsAPI: {exc.response.status_code}")
+    except Exception as exc:
+        logger.exception("Erro no diagnostico TheStatsAPI")
+        await update.message.reply_text(f"Erro no diagnostico TheStatsAPI: {type(exc).__name__}")
     finally:
         await http.close()
 
@@ -832,6 +917,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("debug_live_filters", debug_live_filters_cmd))
     app.add_handler(CommandHandler("debug_sportmonks", debug_sportmonks_cmd))
     app.add_handler(CommandHandler("debug_api_football_stats", debug_api_football_stats_cmd))
+    app.add_handler(CommandHandler("debug_thestatsapi", debug_thestatsapi_cmd))
     app.add_handler(CommandHandler("envcheck", envcheck_cmd))
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=min(60, settings.poll_seconds))
     if settings.startup_alert and not settings.dry_run:
