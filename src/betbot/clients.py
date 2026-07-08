@@ -24,6 +24,14 @@ class HttpJsonClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_status_json(self, url: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> tuple[int, Any]:
+        response = await self._client.get(url, params=params, headers=headers)
+        try:
+            data = response.json()
+        except ValueError:
+            data = {"raw": response.text[:500]}
+        return response.status_code, data
+
 
 class OddsApiClient:
     base_url = "https://api.odds-api.io/v3"
@@ -109,3 +117,42 @@ class SportmonksClient:
             },
         )
         return data.get("data", []) if isinstance(data, dict) else []
+
+    async def diagnostic(self, today: str) -> list[dict[str, Any]]:
+        checks = [
+            (
+                "livescores/inplay básico",
+                f"{self.base_url}/livescores/inplay",
+                {"api_token": self.api_token},
+            ),
+            (
+                "livescores/inplay com stats",
+                f"{self.base_url}/livescores/inplay",
+                {"api_token": self.api_token, "include": "participants,statistics.type,scores"},
+            ),
+            (
+                "fixtures/date hoje",
+                f"{self.base_url}/fixtures/date/{today}",
+                {"api_token": self.api_token, "include": "participants"},
+            ),
+        ]
+        results = []
+        for label, url, params in checks:
+            status, data = await self.http.get_status_json(url, params=params)
+            items = data.get("data", []) if isinstance(data, dict) else []
+            message = ""
+            if isinstance(data, dict):
+                message = str(data.get("message") or data.get("error") or "")
+                errors = data.get("errors")
+                if errors:
+                    message = f"{message} {errors}".strip()
+            results.append(
+                {
+                    "label": label,
+                    "status": status,
+                    "count": len(items) if isinstance(items, list) else 0,
+                    "message": message[:300],
+                    "sample": items[0] if isinstance(items, list) and items else None,
+                }
+            )
+        return results

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from datetime import date
 
 import httpx
 from telegram import Update
@@ -678,12 +679,22 @@ async def debug_sportmonks_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
     http = HttpJsonClient()
     try:
         await update.message.reply_text("Diagnosticando Sportmonks...")
-        live = await load_sportmonks_live(settings, http)
+        if not settings.sportmonks_api_token:
+            await update.message.reply_text("SPORTMONKS_API_TOKEN ausente no Railway.")
+            return
+        client = SportmonksClient(settings.sportmonks_api_token, http)
+        diagnostics = await client.diagnostic(date.today().isoformat())
+        diag_lines = ["Diagnostico Sportmonks:"]
+        for item in diagnostics:
+            suffix = f" | {item['message']}" if item["message"] else ""
+            diag_lines.append(f"- {item['label']}: HTTP {item['status']} | itens={item['count']}{suffix}")
+
+        live = await client.live_scores()
         if not live:
-            await update.message.reply_text("Sportmonks nao retornou jogos ao vivo ou o token/plano nao permitiu a chamada.")
+            await update.message.reply_text("\n".join(diag_lines)[:3900])
             return
 
-        lines = [f"Sportmonks jogos ao vivo: {len(live)}"]
+        lines = diag_lines + [f"\nSportmonks jogos ao vivo parseados: {len(live)}"]
         for fixture in live[:10]:
             home, away = sportmonks_participant_names(fixture)
             stats = compact_sportmonks_statistics(fixture)
