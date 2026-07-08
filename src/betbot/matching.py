@@ -101,3 +101,19 @@ def find_matching_thestatsapi_match(api_football_fixture: dict[str, Any], matche
         if score > best[0]:
             best = (score, match)
     return best[1] if best[0] >= 0.70 else None
+
+
+def find_matching_totalcorner_match(api_football_fixture: dict[str, Any], matches: list[dict[str, Any]]) -> dict[str, Any] | None:
+    teams = api_football_fixture.get("teams", {})
+    home = teams.get("home", {}).get("name", "")
+    away = teams.get("away", {}).get("name", "")
+    best: tuple[float, dict[str, Any] | None] = (0.0, None)
+    for match in matches:
+        tc_home = str(match.get("h") or "")
+        tc_away = str(match.get("a") or "")
+        direct = (similarity(home, tc_home) + similarity(away, tc_away)) / 2
+        swapped = (similarity(home, tc_away) + similarity(away, tc_home)) / 2
+        score = max(direct, swapped)
+        if score > best[0]:
+            best = (score, match)
+    return best[1] if best[0] >= 0.70 else None

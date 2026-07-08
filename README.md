@@ -5,7 +5,7 @@ MVP em Python para monitorar jogos ao vivo, buscar odds na Odds-API.io, buscar e
 ## O que ele faz
 
 - Busca jogos ao vivo na Odds-API.io.
-- Busca fixtures ao vivo e estatisticas na API-Football.
+- Busca fixtures ao vivo na API-Football e tenta estatisticas pela TotalCorner, Sportmonks, API-Football e TheStatsAPI.
 - Casa os jogos por nome dos times.
 - Filtra mercados com odd minima configuravel.
 - Aceita mercados de gols, escanteios/corners, over/under e asiaticos quando aparecem na resposta de odds.
@@ -23,6 +23,7 @@ MVP em Python para monitorar jogos ao vivo, buscar odds na Odds-API.io, buscar e
 - Tem comando `/debug_sportmonks` para ver se a Sportmonks esta retornando jogos e estatisticas.
 - Tem comando `/debug_api_football_stats` para ver o retorno bruto resumido da API-Football.
 - Tem comando `/debug_thestatsapi` para testar autenticação, jogos live e cobertura da TheStatsAPI.
+- Tem comando `/debug_totalcorner` para testar token VIP, jogos ao vivo e estatisticas da TotalCorner.
 - Tem comando `/envcheck` para conferir quais variaveis o deploy esta enxergando.
 - Tenta liquidar entradas de gols e escanteios quando houver dados finais suficientes.
 - Inclui documentacao oficial do EdgeBot AI em `docs/`.

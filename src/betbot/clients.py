@@ -234,3 +234,51 @@ class TheStatsApiClient:
                 }
             )
         return results
+
+
+class TotalCornerClient:
+    base_url = "https://api.totalcorner.com/v1"
+    live_columns = "events,odds,asian,cornerLine,goalLine,asianCorner,attacks,dangerousAttacks,shotOn,shotOff,possession"
+
+    def __init__(self, token: str, http: HttpJsonClient) -> None:
+        self.token = token
+        self.http = http
+
+    async def today_inplay(self, limit: int = 100) -> list[dict[str, Any]]:
+        data = await self.http.get_json(
+            f"{self.base_url}/match/today",
+            params={"token": self.token, "type": "inplay", "columns": self.live_columns},
+        )
+        items = data.get("data", []) if isinstance(data, dict) else []
+        return items[:limit] if isinstance(items, list) else []
+
+    async def diagnostic(self) -> list[dict[str, Any]]:
+        checks = [
+            ("match/today inplay", f"{self.base_url}/match/today", {"token": self.token, "type": "inplay"}),
+            (
+                "match/today inplay com stats",
+                f"{self.base_url}/match/today",
+                {"token": self.token, "type": "inplay", "columns": self.live_columns},
+            ),
+        ]
+        results = []
+        for label, url, params in checks:
+            status, data = await self.http.get_status_json(url, params=params)
+            items = data.get("data", []) if isinstance(data, dict) else []
+            message = ""
+            if isinstance(data, dict):
+                error = data.get("error")
+                if isinstance(error, dict):
+                    message = str(error.get("message") or error.get("code") or "")
+                else:
+                    message = str(data.get("message") or "")
+            results.append(
+                {
+                    "label": label,
+                    "status": status,
+                    "count": len(items) if isinstance(items, list) else 0,
+                    "message": message[:300],
+                    "sample": items[0] if isinstance(items, list) and items else None,
+                }
+            )
+        return results

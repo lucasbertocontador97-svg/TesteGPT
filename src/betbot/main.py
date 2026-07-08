@@ -10,14 +10,14 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
-from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient
+from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
 from .markets import flatten_all_markets, flatten_markets, market_matches_idea
-from .matching import find_matching_odds_event, find_matching_sportmonks_fixture, find_matching_thestatsapi_match, sportmonks_participant_names
+from .matching import find_matching_odds_event, find_matching_sportmonks_fixture, find_matching_thestatsapi_match, find_matching_totalcorner_match, sportmonks_participant_names
 from .models import Decision, GameSnapshot
 from .settlement import settle_alert
-from .stats import compact_player_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, compact_thestatsapi_statistics, extract_minute, extract_score, has_actionable_stats, is_high_variance_match
+from .stats import compact_player_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, compact_thestatsapi_statistics, compact_totalcorner_statistics, extract_minute, extract_score, has_actionable_stats, is_high_variance_match
 from .storage import Storage
 from .telegram_io import format_alert, send_message
 
@@ -48,6 +48,16 @@ async def load_thestatsapi_live(settings, http: HttpJsonClient) -> list[dict]:
         return []
 
 
+async def load_totalcorner_live(settings, http: HttpJsonClient) -> list[dict]:
+    if not settings.totalcorner_token:
+        return []
+    try:
+        return await TotalCornerClient(settings.totalcorner_token, http).today_inplay(settings.max_live_events)
+    except httpx.HTTPStatusError as exc:
+        logger.warning("TotalCorner live matches falhou com HTTP %s.", exc.response.status_code)
+        return []
+
+
 def make_sportmonks_client(settings, http: HttpJsonClient) -> SportmonksClient | None:
     if not settings.sportmonks_api_token:
         return None
@@ -60,6 +70,12 @@ def make_thestatsapi_client(settings, http: HttpJsonClient) -> TheStatsApiClient
     return TheStatsApiClient(settings.thestatsapi_key, http)
 
 
+def make_totalcorner_client(settings, http: HttpJsonClient) -> TotalCornerClient | None:
+    if not settings.totalcorner_token:
+        return None
+    return TotalCornerClient(settings.totalcorner_token, http)
+
+
 async def fixture_stats_with_sportmonks_fallback(
     fixture: dict,
     api_football: ApiFootballClient,
@@ -67,8 +83,13 @@ async def fixture_stats_with_sportmonks_fallback(
     sportmonks_client: SportmonksClient | None = None,
     thestatsapi_live: list[dict] | None = None,
     thestatsapi_client: TheStatsApiClient | None = None,
+    totalcorner_live: list[dict] | None = None,
 ) -> dict:
     fixture_id = fixture.get("fixture", {}).get("id")
+    totalcorner_match = find_matching_totalcorner_match(fixture, totalcorner_live or []) if totalcorner_live else None
+    totalcorner_stats = compact_totalcorner_statistics(totalcorner_match or {}) if totalcorner_match else {}
+    if has_actionable_stats(totalcorner_stats):
+        return totalcorner_stats
     api_stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id))) if fixture_id else {}
     sportmonks_fixture = find_matching_sportmonks_fixture(fixture, sportmonks_live) if sportmonks_live else None
     sportmonks_stats = compact_sportmonks_statistics(sportmonks_fixture or {}) if sportmonks_fixture else {}
@@ -110,6 +131,7 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
     sportmonks_client = make_sportmonks_client(settings, odds_api.http)
     thestatsapi_live = await load_thestatsapi_live(settings, odds_api.http)
     thestatsapi_client = make_thestatsapi_client(settings, odds_api.http)
+    totalcorner_live = await load_totalcorner_live(settings, odds_api.http)
     matched_pairs: list[tuple[dict, dict]] = []
     used_event_ids: set[str] = set()
     for fixture in football_fixtures:
@@ -132,7 +154,7 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
         event_id = str(event.get("id") or "")
         fixture_id = fixture.get("fixture", {}).get("id") if fixture else None
         stats = await fixture_stats_with_sportmonks_fallback(
-            fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client
+            fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
         )
         score_home, score_away = extract_score(fixture)
         fixture_league = fixture.get("league", {}) if fixture else {}
@@ -382,6 +404,7 @@ async def test_analysis_no_odds_cmd(update: Update, context: ContextTypes.DEFAUL
         sportmonks_client = make_sportmonks_client(settings, http)
         thestatsapi_live = await load_thestatsapi_live(settings, http)
         thestatsapi_client = make_thestatsapi_client(settings, http)
+        totalcorner_live = await load_totalcorner_live(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
             await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
@@ -390,7 +413,7 @@ async def test_analysis_no_odds_cmd(update: Update, context: ContextTypes.DEFAUL
         fixture = fixtures[0]
         fixture_id = fixture.get("fixture", {}).get("id")
         stats = await fixture_stats_with_sportmonks_fallback(
-            fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client
+            fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
         )
         score_home, score_away = extract_score(fixture)
         teams = fixture.get("teams", {})
@@ -439,6 +462,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         sportmonks_client = make_sportmonks_client(settings, http)
         thestatsapi_live = await load_thestatsapi_live(settings, http)
         thestatsapi_client = make_thestatsapi_client(settings, http)
+        totalcorner_live = await load_totalcorner_live(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
             await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
@@ -449,7 +473,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
             if not fixture_id:
                 continue
             stats = await fixture_stats_with_sportmonks_fallback(
-                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client
+                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
             )
             score_home, score_away = extract_score(fixture)
             teams = fixture.get("teams", {})
@@ -574,6 +598,7 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
         sportmonks_client = make_sportmonks_client(settings, http)
         thestatsapi_live = await load_thestatsapi_live(settings, http)
         thestatsapi_client = make_thestatsapi_client(settings, http)
+        totalcorner_live = await load_totalcorner_live(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
             await update.message.reply_text("Nao ha jogos ao vivo agora na API-Football.")
@@ -585,7 +610,7 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
             if not fixture_id:
                 continue
             stats = await fixture_stats_with_sportmonks_fallback(
-                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client
+                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
             )
             score_home, score_away = extract_score(fixture)
             teams = fixture.get("teams", {})
@@ -694,13 +719,14 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
         sportmonks_client = make_sportmonks_client(settings, http)
         thestatsapi_live = await load_thestatsapi_live(settings, http)
         thestatsapi_client = make_thestatsapi_client(settings, http)
+        totalcorner_live = await load_totalcorner_live(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
             await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
             return
 
         lines = [
-            f"Jogos ao vivo analisados: {min(len(fixtures), 10)} | Sportmonks live: {len(sportmonks_live)} | TheStatsAPI live: {len(thestatsapi_live)}"
+            f"Jogos ao vivo analisados: {min(len(fixtures), 10)} | TotalCorner live: {len(totalcorner_live)} | Sportmonks live: {len(sportmonks_live)} | TheStatsAPI live: {len(thestatsapi_live)}"
         ]
         for fixture in fixtures[:10]:
             fixture_id = fixture.get("fixture", {}).get("id")
@@ -714,7 +740,7 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
                 lines.append(f"- {home} x {away}: sem fixture_id")
                 continue
             stats = await fixture_stats_with_sportmonks_fallback(
-                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client
+                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
             )
             required_confidence = settings.min_confidence
             flags = []
@@ -746,6 +772,44 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as exc:
         logger.exception("Erro no diagnostico de filtros")
         await update.message.reply_text(f"Erro no diagnostico de filtros: {type(exc).__name__}")
+    finally:
+        await http.close()
+
+
+async def debug_totalcorner_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Diagnosticando TotalCorner...")
+        if not settings.totalcorner_token:
+            await update.message.reply_text("TOTALCORNER_TOKEN ausente no Railway.")
+            return
+        client = TotalCornerClient(settings.totalcorner_token, http)
+        diagnostics = await client.diagnostic()
+        lines = ["Diagnostico TotalCorner:"]
+        for item in diagnostics:
+            suffix = f" | {item['message']}" if item["message"] else ""
+            lines.append(f"- {item['label']}: HTTP {item['status']} | itens={item['count']}{suffix}")
+
+        live = await client.today_inplay(settings.max_live_events)
+        if live:
+            lines.append(f"\nTotalCorner jogos ao vivo parseados: {len(live)}")
+            for match in live[:10]:
+                stats = compact_totalcorner_statistics(match)
+                stat_count = sum(len(values) for values in stats.values())
+                summary = compact_stats_summary(stats).replace("\n", " | ") if stats else "sem stats parseadas"
+                score = f"{match.get('hg', '?')}x{match.get('ag', '?')}"
+                lines.append(
+                    f"- {match.get('h', '?')} x {match.get('a', '?')} {score} {match.get('status', '?')}': "
+                    f"stats={stat_count} | {summary}"
+                )
+        await update.message.reply_text("\n".join(lines)[:3900])
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Erro HTTP no diagnostico TotalCorner: %s", exc.response.status_code)
+        await update.message.reply_text(f"Erro HTTP TotalCorner: {exc.response.status_code}")
+    except Exception as exc:
+        logger.exception("Erro no diagnostico TotalCorner")
+        await update.message.reply_text(f"Erro no diagnostico TotalCorner: {type(exc).__name__}")
     finally:
         await http.close()
 
@@ -918,6 +982,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("debug_sportmonks", debug_sportmonks_cmd))
     app.add_handler(CommandHandler("debug_api_football_stats", debug_api_football_stats_cmd))
     app.add_handler(CommandHandler("debug_thestatsapi", debug_thestatsapi_cmd))
+    app.add_handler(CommandHandler("debug_totalcorner", debug_totalcorner_cmd))
     app.add_handler(CommandHandler("envcheck", envcheck_cmd))
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=min(60, settings.poll_seconds))
     if settings.startup_alert and not settings.dry_run:

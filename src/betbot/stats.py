@@ -93,6 +93,54 @@ def compact_thestatsapi_statistics(match: dict[str, Any], stats_response: dict[s
     return {team: values for team, values in result.items() if values}
 
 
+def _to_int_or_raw(value: Any) -> Any:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _totalcorner_pair(match: dict[str, Any], *keys: str) -> tuple[Any, Any]:
+    for key in keys:
+        value = match.get(key)
+        if isinstance(value, list) and len(value) >= 2:
+            return _to_int_or_raw(value[0]), _to_int_or_raw(value[1])
+    return None, None
+
+
+def compact_totalcorner_statistics(match: dict[str, Any]) -> dict[str, Any]:
+    home = str(match.get("h") or "home")
+    away = str(match.get("a") or "away")
+    result = {home: {}, away: {}}
+
+    if match.get("hc") is not None:
+        result[home]["Corner Kicks"] = _to_int_or_raw(match.get("hc"))
+    if match.get("ac") is not None:
+        result[away]["Corner Kicks"] = _to_int_or_raw(match.get("ac"))
+
+    pair_fields = [
+        (("shot_on", "shotOn"), "Shots on Goal"),
+        (("shot_off", "shotOff"), "Shots off Goal"),
+        (("attacks",), "Attacks"),
+        (("dangerous_attacks", "dangerousAttacks", "dangerous"), "Dangerous Attacks"),
+        (("possess", "possession"), "Ball Possession"),
+    ]
+    for keys, target in pair_fields:
+        home_value, away_value = _totalcorner_pair(match, *keys)
+        if home_value is not None:
+            result[home][target] = home_value
+        if away_value is not None:
+            result[away][target] = away_value
+
+    for team in (home, away):
+        shots_on = result[team].get("Shots on Goal")
+        shots_off = result[team].get("Shots off Goal")
+        if isinstance(shots_on, int) and isinstance(shots_off, int):
+            result[team]["Total Shots"] = shots_on + shots_off
+
+    return {team: values for team, values in result.items() if values}
+
+
 SPORTMONKS_TYPE_ID_MAP = {
     34: "Corner Kicks",
     41: "Shots off Goal",
