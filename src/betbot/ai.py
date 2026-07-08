@@ -99,3 +99,43 @@ async def analyze_game(game: GameSnapshot, *, api_key: str | None, model: str | 
         str(data.get("stake", "baixa")),
         chosen.alert_key,
     )
+
+
+async def analyze_live_game_without_odds(game: GameSnapshot, *, api_key: str | None, model: str | None) -> str:
+    payload = {
+        "game": {
+            "fixture_id": game.fixture_id,
+            "league": game.league,
+            "home": game.home,
+            "away": game.away,
+            "minute": game.minute,
+            "score": {"home": game.score_home, "away": game.score_away},
+            "stats": game.stats,
+        },
+        "instruction": (
+            "Analise somente o jogo ao vivo e as estatisticas. Ignore odds e nao recomende aposta real. "
+            "Diga quais mercados fariam sentido observar depois, como gols ou escanteios, e explique em portugues."
+        ),
+    }
+    if not api_key:
+        return (
+            "Analise sem IA: jogo ao vivo carregado com sucesso pela API-Football. "
+            "Configure OPENAI_API_KEY para receber uma leitura qualitativa das estatisticas."
+        )
+
+    client = AsyncOpenAI(api_key=api_key)
+    response = await client.chat.completions.create(
+        model=model or "gpt-4o-mini",
+        temperature=0.2,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Voce e um analista conservador de futebol ao vivo. "
+                    "Nao recomende aposta real sem odds. Responda curto, pratico e em portugues."
+                ),
+            },
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+    )
+    return (response.choices[0].message.content or "Sem analise retornada.").strip()[:1500]

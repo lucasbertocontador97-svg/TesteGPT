@@ -8,7 +8,7 @@ import httpx
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from .ai import analyze_game
+from .ai import analyze_game, analyze_live_game_without_odds
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .markets import flatten_all_markets, flatten_markets
@@ -273,6 +273,56 @@ async def envcheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text("\n".join(lines))
 
 
+async def test_analysis_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Testando analise sem odds, usando apenas jogos ao vivo da API-Football...")
+        api_football = ApiFootballClient(settings.api_football_key, http)
+        fixtures = await api_football.live_fixtures()
+        if not fixtures:
+            await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
+            return
+
+        fixture = fixtures[0]
+        fixture_id = fixture.get("fixture", {}).get("id")
+        stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id))) if fixture_id else {}
+        score_home, score_away = extract_score(fixture)
+        teams = fixture.get("teams", {})
+        league = fixture.get("league", {}).get("name", "")
+        game = GameSnapshot(
+            event_id="api-football-only",
+            fixture_id=fixture_id,
+            league=str(league or ""),
+            home=str(teams.get("home", {}).get("name") or ""),
+            away=str(teams.get("away", {}).get("name") or ""),
+            minute=extract_minute(fixture),
+            score_home=score_home,
+            score_away=score_away,
+            stats=stats,
+            markets=[],
+        )
+        analysis = await analyze_live_game_without_odds(game, api_key=settings.openai_api_key, model=settings.openai_model)
+        minute = "?" if game.minute is None else f"{game.minute}'"
+        score = f"{game.score_home if game.score_home is not None else '?'}x{game.score_away if game.score_away is not None else '?'}"
+        await update.message.reply_text(
+            "TESTE DE ANALISE - SEM ODDS\n\n"
+            f"Jogo: {game.home} x {game.away}\n"
+            f"Liga: {game.league or '-'}\n"
+            f"Tempo: {minute}\n"
+            f"Placar: {score}\n\n"
+            f"Analise:\n{analysis}"
+        )
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Erro HTTP no teste sem odds: %s", exc.response.status_code)
+        await update.message.reply_text(f"Erro HTTP no teste sem odds: {exc.response.status_code}")
+    except Exception as exc:
+        logger.exception("Erro no teste de analise sem odds")
+        await update.message.reply_text(f"Erro no teste de analise sem odds: {type(exc).__name__}")
+    finally:
+        await http.close()
+
+
 async def scheduled_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     storage = Storage(settings.database_path)
@@ -308,6 +358,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("performance", performance_cmd))
     app.add_handler(CommandHandler("scan", scan_cmd))
     app.add_handler(CommandHandler("force_live_alert", force_live_alert_cmd))
+    app.add_handler(CommandHandler("test_analysis_no_odds", test_analysis_no_odds_cmd))
     app.add_handler(CommandHandler("envcheck", envcheck_cmd))
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=min(60, settings.poll_seconds))
     if settings.startup_alert and not settings.dry_run:
