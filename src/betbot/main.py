@@ -8,10 +8,10 @@ import httpx
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from .ai import analyze_game, analyze_live_game_without_odds
+from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
-from .markets import flatten_all_markets, flatten_markets
+from .markets import flatten_all_markets, flatten_markets, market_matches_idea
 from .matching import find_matching_odds_event
 from .models import GameSnapshot
 from .settlement import settle_alert
@@ -49,35 +49,11 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
         logger.info("Jogos ao vivo da API-Football sem correspondencia na Odds-API.")
         return []
 
-    event_ids = [str(event.get("id")) for _, event in matched_pairs if event.get("id")]
-    odds_by_id = {}
-    if settings.odds_use_multi:
-        try:
-            odds_payloads = await odds_api.odds_multi(event_ids, settings.bookmakers)
-            odds_by_id = {str(payload.get("id") or payload.get("eventId")): payload for payload in odds_payloads}
-        except httpx.HTTPStatusError as exc:
-            logger.warning("Odds multi falhou com HTTP %s; tentando evento por evento.", exc.response.status_code)
-
-    if not odds_by_id:
-        for event_id in event_ids[: settings.odds_detail_limit]:
-            try:
-                payload = await odds_api.odds(event_id, settings.bookmakers)
-            except httpx.HTTPStatusError as exc:
-                logger.warning("Odds do evento %s falhou com HTTP %s.", event_id, exc.response.status_code)
-                continue
-            if payload:
-                odds_by_id[str(payload.get("id") or payload.get("eventId") or event_id)] = payload
     snapshots: list[GameSnapshot] = []
 
     for fixture, event in matched_pairs:
         event_id = str(event.get("id") or "")
-        odds_payload = odds_by_id.get(event_id)
-        if not odds_payload:
-            continue
         fixture_id = fixture.get("fixture", {}).get("id") if fixture else None
-        markets = flatten_markets(odds_payload, fixture_id=fixture_id, min_odd=settings.min_odd)
-        if not markets:
-            continue
         stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id))) if fixture_id else {}
         score_home, score_away = extract_score(fixture)
         fixture_league = fixture.get("league", {}) if fixture else {}
@@ -94,7 +70,7 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
                 score_home=score_home,
                 score_away=score_away,
                 stats=stats,
-                markets=markets,
+                markets=[],
             )
         )
     return snapshots
@@ -108,15 +84,38 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
         api_football = ApiFootballClient(settings.api_football_key, http)
         sent = 0
         for game in await build_snapshots(settings, odds_api, api_football):
-            decision = await analyze_game(
+            idea = await suggest_market_without_odds(
                 game,
                 api_key=settings.openai_api_key,
                 model=settings.openai_model,
                 min_confidence=settings.min_confidence,
             )
-            if not decision.should_bet or not decision.alert_key:
-                logger.info("Sem entrada: %s x %s - %s", game.home, game.away, decision.reason)
+            if not idea.should_check_odds:
+                logger.info("IA nao pediu odds: %s x %s - %s", game.home, game.away, idea.reason)
                 continue
+            try:
+                odds_payload = await odds_api.odds(game.event_id, settings.bookmakers)
+            except httpx.HTTPStatusError as exc:
+                logger.warning("Odds apos ideia da IA falhou para %s com HTTP %s.", game.event_id, exc.response.status_code)
+                continue
+            markets = flatten_markets(odds_payload or {}, fixture_id=game.fixture_id, min_odd=settings.min_odd)
+            compatible = [market for market in markets if market_matches_idea(market, idea.market_family, idea.selection)]
+            if not compatible:
+                logger.info("Sem odd >= %.2f para ideia %s/%s em %s x %s", settings.min_odd, idea.market_family, idea.selection, game.home, game.away)
+                continue
+            chosen = sorted(compatible, key=lambda market: market.odd, reverse=True)[0]
+            decision = Decision(
+                True,
+                idea.confidence,
+                chosen.market_name,
+                chosen.selection,
+                chosen.bookmaker,
+                chosen.odd,
+                chosen.line,
+                idea.reason,
+                idea.stake,
+                chosen.alert_key,
+            )
             if storage.seen_alert(decision.alert_key):
                 logger.info("Entrada repetida ignorada: %s", decision.alert_key)
                 continue

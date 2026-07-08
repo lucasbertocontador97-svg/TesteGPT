@@ -5,7 +5,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from .models import Decision, GameSnapshot, MarketOption
+from .models import Decision, GameSnapshot, MarketIdea, MarketOption
 
 
 SYSTEM_PROMPT = """Voce e um analista conservador de apostas esportivas ao vivo.
@@ -139,3 +139,80 @@ async def analyze_live_game_without_odds(game: GameSnapshot, *, api_key: str | N
         ],
     )
     return (response.choices[0].message.content or "Sem analise retornada.").strip()[:1500]
+
+
+async def suggest_market_without_odds(
+    game: GameSnapshot,
+    *,
+    api_key: str | None,
+    model: str | None,
+    min_confidence: int,
+) -> MarketIdea:
+    if not api_key:
+        return MarketIdea(False, "none", "none", 0, "OPENAI_API_KEY nao configurada.", "sem entrada")
+
+    client = AsyncOpenAI(api_key=api_key)
+    payload = {
+        "game": {
+            "fixture_id": game.fixture_id,
+            "league": game.league,
+            "home": game.home,
+            "away": game.away,
+            "minute": game.minute,
+            "score": {"home": game.score_home, "away": game.score_away},
+            "stats": game.stats,
+        },
+        "allowed_market_families": [
+            "goals",
+            "corners",
+        ],
+        "allowed_selections": [
+            "over",
+            "under",
+        ],
+        "rules": [
+            "Escolha o mercado pelo momento do jogo, sem ver odds.",
+            "Se nao houver leitura clara, responda should_check_odds=false.",
+            "Nao invente odds.",
+            "Use goals para mercados de gols e corners para escanteios.",
+        ],
+        "output_schema": {
+            "should_check_odds": "boolean",
+            "market_family": "goals|corners|none",
+            "selection": "over|under|none",
+            "confidence": "integer 0-100",
+            "reason": "explicacao curta em portugues",
+            "stake": "baixa|media|alta|sem entrada",
+        },
+    }
+    response = await client.chat.completions.create(
+        model=model or "gpt-4o-mini",
+        temperature=0.1,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Voce e um analista conservador de futebol ao vivo. "
+                    "Sua tarefa e escolher qual mercado observar antes de consultar odds. "
+                    "Responda somente JSON valido."
+                ),
+            },
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ],
+    )
+    data = json.loads(response.choices[0].message.content or "{}")
+    confidence = int(data.get("confidence", 0))
+    should_check = bool(data.get("should_check_odds")) and confidence >= min_confidence
+    family = str(data.get("market_family", "none")).lower()
+    selection = str(data.get("selection", "none")).lower()
+    if family not in {"goals", "corners"} or selection not in {"over", "under"}:
+        should_check = False
+    return MarketIdea(
+        should_check,
+        family if should_check else "none",
+        selection if should_check else "none",
+        confidence,
+        str(data.get("reason", ""))[:700],
+        str(data.get("stake", "baixa" if should_check else "sem entrada")),
+    )

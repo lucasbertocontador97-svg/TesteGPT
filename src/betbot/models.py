@@ -48,3 +48,13 @@ class Decision:
     reason: str
     stake: str
     alert_key: str | None = None
+
+
+@dataclass(frozen=True)
+class MarketIdea:
+    should_check_odds: bool
+    market_family: str
+    selection: str
+    confidence: int
+    reason: str
+    stake: str

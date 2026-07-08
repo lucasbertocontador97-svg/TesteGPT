@@ -135,3 +135,14 @@ def flatten_all_markets(
                         )
                     )
     return options
+
+
+def market_matches_idea(option: MarketOption, market_family: str, selection: str) -> bool:
+    name = option.market_name.lower()
+    if option.selection != selection:
+        return False
+    if market_family == "goals":
+        return any(word in name for word in GOAL_WORDS)
+    if market_family == "corners":
+        return any(word in name for word in CORNER_WORDS)
+    return False
