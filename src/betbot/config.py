@@ -24,6 +24,7 @@ class Settings:
     max_live_events: int
     database_path: Path
     startup_alert: bool
+    odds_use_multi: bool
 
 
 def load_settings() -> Settings:
@@ -47,6 +48,7 @@ def load_settings() -> Settings:
         max_live_events=int(os.getenv("MAX_LIVE_EVENTS", "20")),
         database_path=db_path,
         startup_alert=os.getenv("STARTUP_ALERT", "true").lower() in {"1", "true", "yes", "sim"},
+        odds_use_multi=os.getenv("ODDS_USE_MULTI", "false").lower() in {"1", "true", "yes", "sim"},
     )
 
 
@@ -82,4 +84,5 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
         "API_FOOTBALL_KEY": bool(settings.api_football_key),
         "OPENAI_API_KEY": bool(settings.openai_api_key),
         "DRY_RUN_FALSE": not settings.dry_run,
+        "ODDS_USE_MULTI": settings.odds_use_multi,
     }

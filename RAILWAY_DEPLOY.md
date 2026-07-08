@@ -28,6 +28,7 @@ BOOKMAKERS=Bet365,Betano
 SPORT=football
 MAX_LIVE_EVENTS=20
 STARTUP_ALERT=true
+ODDS_USE_MULTI=false
 ```
 
 `OPENAI_MODEL` pode ficar vazio; o bot usa o padrao do codigo.

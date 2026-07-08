@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sys
 
+import httpx
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -20,14 +21,32 @@ from .telegram_io import format_alert, send_message
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
 logger = logging.getLogger("betbot")
 
 
 async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFootballClient) -> list[GameSnapshot]:
     odds_events = await odds_api.live_events(settings.sport, settings.max_live_events)
     football_fixtures = await api_football.live_fixtures()
-    odds_payloads = await odds_api.odds_multi([str(event.get("id")) for event in odds_events if event.get("id")], settings.bookmakers)
-    odds_by_id = {str(payload.get("id") or payload.get("eventId")): payload for payload in odds_payloads}
+    event_ids = [str(event.get("id")) for event in odds_events if event.get("id")]
+    odds_by_id = {}
+    if settings.odds_use_multi:
+        try:
+            odds_payloads = await odds_api.odds_multi(event_ids, settings.bookmakers)
+            odds_by_id = {str(payload.get("id") or payload.get("eventId")): payload for payload in odds_payloads}
+        except httpx.HTTPStatusError as exc:
+            logger.warning("Odds multi falhou com HTTP %s; tentando evento por evento.", exc.response.status_code)
+
+    if not odds_by_id:
+        for event_id in event_ids[:10]:
+            try:
+                payload = await odds_api.odds(event_id, settings.bookmakers)
+            except httpx.HTTPStatusError as exc:
+                logger.warning("Odds do evento %s falhou com HTTP %s.", event_id, exc.response.status_code)
+                continue
+            if payload:
+                odds_by_id[str(payload.get("id") or payload.get("eventId") or event_id)] = payload
     snapshots: list[GameSnapshot] = []
 
     for event in odds_events:

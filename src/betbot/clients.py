@@ -52,6 +52,17 @@ class OddsApiClient:
         )
         return data if isinstance(data, list) else []
 
+    async def odds(self, event_id: str, bookmakers: list[str]) -> dict[str, Any] | None:
+        data = await self.http.get_json(
+            f"{self.base_url}/odds",
+            params={
+                "apiKey": self.api_key,
+                "eventId": event_id,
+                "bookmakers": ",".join(bookmakers),
+            },
+        )
+        return data if isinstance(data, dict) else None
+
 
 class ApiFootballClient:
     base_url = "https://v3.football.api-sports.io"
