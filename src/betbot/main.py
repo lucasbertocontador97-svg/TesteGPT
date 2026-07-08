@@ -13,7 +13,7 @@ from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .markets import flatten_all_markets, flatten_markets, market_matches_idea
 from .matching import find_matching_odds_event
-from .models import GameSnapshot
+from .models import Decision, GameSnapshot
 from .settlement import settle_alert
 from .stats import compact_statistics, extract_minute, extract_score
 from .storage import Storage
