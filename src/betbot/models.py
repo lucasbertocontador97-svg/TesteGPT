@@ -55,6 +55,7 @@ class MarketIdea:
     should_check_odds: bool
     market_family: str
     selection: str
+    line: float | None
     confidence: int
     reason: str
     stake: str

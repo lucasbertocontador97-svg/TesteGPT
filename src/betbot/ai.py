@@ -149,7 +149,7 @@ async def suggest_market_without_odds(
     min_confidence: int,
 ) -> MarketIdea:
     if not api_key:
-        return MarketIdea(False, "none", "none", 0, "OPENAI_API_KEY nao configurada.", "sem entrada")
+        return MarketIdea(False, "none", "none", None, 0, "OPENAI_API_KEY nao configurada.", "sem entrada")
 
     client = AsyncOpenAI(api_key=api_key)
     payload = {
@@ -162,17 +162,21 @@ async def suggest_market_without_odds(
             "score": {"home": game.score_home, "away": game.score_away},
             "stats": game.stats,
         },
-        "allowed_market_families": [
-            "goals",
-            "corners",
-        ],
+        "allowed_market_families": ["goals", "corners"],
         "allowed_selections": [
             "over",
             "under",
         ],
+        "line_guidance": {
+            "goals": "Escolha uma linha clara como 0.5, 1.5, 2.5, 3.5 ou linha asiatica como 1.0, 2.0, 3.0.",
+            "corners": "Escolha uma linha clara como 5.5, 6.5, 7.5, 8.5, 9.5 ou asiatica como 7.0, 8.0, 9.0.",
+        },
         "rules": [
             "Escolha o mercado pelo momento do jogo, sem ver odds.",
             "Se nao houver leitura clara, responda should_check_odds=false.",
+            "Se escolher mercado, line e obrigatorio.",
+            "A linha deve ser coerente com placar, tempo, escanteios e estatisticas do jogo.",
+            "Explique citando dados concretos das estatisticas recebidas quando existirem.",
             "Nao invente odds.",
             "Use goals para mercados de gols e corners para escanteios.",
         ],
@@ -180,6 +184,7 @@ async def suggest_market_without_odds(
             "should_check_odds": "boolean",
             "market_family": "goals|corners|none",
             "selection": "over|under|none",
+            "line": "number or null",
             "confidence": "integer 0-100",
             "reason": "explicacao curta em portugues",
             "stake": "baixa|media|alta|sem entrada",
@@ -206,12 +211,19 @@ async def suggest_market_without_odds(
     should_check = bool(data.get("should_check_odds")) and confidence >= min_confidence
     family = str(data.get("market_family", "none")).lower()
     selection = str(data.get("selection", "none")).lower()
+    try:
+        line = float(data["line"]) if data.get("line") is not None else None
+    except (TypeError, ValueError):
+        line = None
     if family not in {"goals", "corners"} or selection not in {"over", "under"}:
+        should_check = False
+    if line is None:
         should_check = False
     return MarketIdea(
         should_check,
         family if should_check else "none",
         selection if should_check else "none",
+        line if should_check else None,
         confidence,
         str(data.get("reason", ""))[:700],
         str(data.get("stake", "baixa" if should_check else "sem entrada")),

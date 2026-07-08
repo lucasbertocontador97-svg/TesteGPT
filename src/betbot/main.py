@@ -15,7 +15,7 @@ from .markets import flatten_all_markets, flatten_markets, market_matches_idea
 from .matching import find_matching_odds_event
 from .models import Decision, GameSnapshot
 from .settlement import settle_alert
-from .stats import compact_statistics, extract_minute, extract_score
+from .stats import compact_statistics, compact_stats_summary, extract_minute, extract_score
 from .storage import Storage
 from .telegram_io import format_alert, send_message
 
@@ -99,7 +99,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 logger.warning("Odds apos ideia da IA falhou para %s com HTTP %s.", game.event_id, exc.response.status_code)
                 continue
             markets = flatten_markets(odds_payload or {}, fixture_id=game.fixture_id, min_odd=settings.min_odd)
-            compatible = [market for market in markets if market_matches_idea(market, idea.market_family, idea.selection)]
+            compatible = [market for market in markets if market_matches_idea(market, idea.market_family, idea.selection, idea.line)]
             if not compatible:
                 logger.info("Sem odd >= %.2f para ideia %s/%s em %s x %s", settings.min_odd, idea.market_family, idea.selection, game.home, game.away)
                 continue
@@ -111,7 +111,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 chosen.selection,
                 chosen.bookmaker,
                 chosen.odd,
-                chosen.line,
+                chosen.line or idea.line,
                 idea.reason,
                 idea.stake,
                 chosen.alert_key,
@@ -370,7 +370,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 ("corners", "over"): "Mais escanteios",
                 ("corners", "under"): "Menos escanteios",
             }.get((idea.market_family, idea.selection), f"{idea.market_family} {idea.selection}")
-            alert_key = f"no-odds|{game.fixture_id}|{idea.market_family}|{idea.selection}|{game.minute or ''}"
+            alert_key = f"no-odds|{game.fixture_id}|{idea.market_family}|{idea.selection}|{idea.line}|{game.minute or ''}"
             if storage.seen_alert(alert_key):
                 await update.message.reply_text("A IA encontrou uma entrada sem odds, mas ela ja foi enviada antes.")
                 return
@@ -382,7 +382,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 idea.selection,
                 "Conferir manualmente",
                 0.0,
-                None,
+                idea.line,
                 idea.reason,
                 idea.stake,
                 alert_key,
@@ -390,6 +390,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
             storage.save_manual_alert(game, decision)
             minute = "?" if game.minute is None else f"{game.minute}'"
             score = f"{game.score_home if game.score_home is not None else '?'}x{game.score_away if game.score_away is not None else '?'}"
+            line_label = "" if idea.line is None else f" {idea.line:g}"
             await update.message.reply_text(
                 "ENTRADA OFICIAL - SEM ODD\n\n"
                 "A IA escolheu o mercado pela leitura do jogo ao vivo. Confira a odd manualmente antes de entrar.\n\n"
@@ -397,10 +398,11 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"Liga: {game.league or '-'}\n"
                 f"Tempo: {minute}\n"
                 f"Placar: {score}\n"
-                f"Mercado indicado: {market_label}\n"
+                f"Mercado indicado: {market_label}{line_label}\n"
                 f"Direcao: {idea.selection}\n"
                 f"Confianca: {idea.confidence}%\n"
                 f"Stake: {idea.stake}\n\n"
+                f"Estatisticas usadas:\n{compact_stats_summary(game.stats)}\n\n"
                 f"Motivo: {idea.reason}"
             )
             return
