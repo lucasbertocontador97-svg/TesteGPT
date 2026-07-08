@@ -132,6 +132,20 @@ async def performance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await status_cmd(update, context)
 
 
+async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    storage = Storage(settings.database_path)
+    try:
+        await update.message.reply_text("Forcando varredura agora...")
+        sent = await process_once(settings, storage)
+        await update.message.reply_text(f"Varredura concluida. Alertas enviados: {sent}")
+    except Exception as exc:
+        logger.exception("Erro ao forcar varredura")
+        await update.message.reply_text(f"Erro ao forcar varredura: {exc}")
+    finally:
+        storage.close()
+
+
 async def scheduled_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     storage = Storage(settings.database_path)
@@ -141,6 +155,15 @@ async def scheduled_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Erro no ciclo de monitoramento")
     finally:
         storage.close()
+
+
+async def startup_alert_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    await send_message(
+        settings.telegram_bot_token,
+        settings.telegram_chat_id,
+        "Bot iniciado no Railway. Use /status ou /scan para testar.",
+    )
 
 
 def run_bot() -> None:
@@ -153,7 +176,10 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("last", last_cmd))
     app.add_handler(CommandHandler("performance", performance_cmd))
+    app.add_handler(CommandHandler("scan", scan_cmd))
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=5)
+    if settings.startup_alert and not settings.dry_run:
+        app.job_queue.run_once(startup_alert_job, when=1)
     app.run_polling()
 
 

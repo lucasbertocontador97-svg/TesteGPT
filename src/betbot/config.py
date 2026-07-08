@@ -23,6 +23,7 @@ class Settings:
     sport: str
     max_live_events: int
     database_path: Path
+    startup_alert: bool
 
 
 def load_settings() -> Settings:
@@ -45,6 +46,7 @@ def load_settings() -> Settings:
         sport=os.getenv("SPORT", "football"),
         max_live_events=int(os.getenv("MAX_LIVE_EVENTS", "20")),
         database_path=db_path,
+        startup_alert=os.getenv("STARTUP_ALERT", "true").lower() in {"1", "true", "yes", "sim"},
     )
 
 

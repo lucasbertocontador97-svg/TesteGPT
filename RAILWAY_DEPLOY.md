@@ -27,6 +27,7 @@ MIN_CONFIDENCE=70
 BOOKMAKERS=Bet365,Betano
 SPORT=football
 MAX_LIVE_EVENTS=20
+STARTUP_ALERT=true
 ```
 
 `OPENAI_MODEL` pode ficar vazio; o bot usa o padrao do codigo.
@@ -59,6 +60,7 @@ No Telegram, teste:
 /status
 /last
 /performance
+/scan
 ```
 
 ## Observacoes
