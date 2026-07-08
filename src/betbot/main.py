@@ -417,6 +417,88 @@ async def force_live_alert_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         await http.close()
 
 
+async def force_home_win_test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Buscando teste de vitoria da casa com odd >= 1.80...")
+        odds_api = OddsApiClient(settings.odds_api_key, http)
+        live_events = await odds_api.live_events(settings.sport, settings.max_live_events)
+        if not live_events:
+            await update.message.reply_text("Odds-API nao retornou jogos ao vivo agora.")
+            return
+
+        for event in live_events[: settings.odds_detail_limit]:
+            event_id = str(event.get("id") or "")
+            if not event_id:
+                continue
+            odds_payload = await odds_api.odds(event_id, settings.bookmakers)
+            markets = flatten_all_markets(odds_payload or {}, fixture_id=None, min_odd=settings.min_odd)
+            home_markets = [
+                market
+                for market in markets
+                if market.selection == "home"
+                and any(word in market.market_name.lower() for word in ("winner", "moneyline", "match odds", "1x2", "h2h"))
+            ]
+            if not home_markets:
+                continue
+            chosen = sorted(home_markets, key=lambda market: market.odd, reverse=True)[0]
+            bookmaker_links = {}
+            for market in sorted(home_markets, key=lambda item: item.odd, reverse=True):
+                if market.link_url and market.bookmaker not in bookmaker_links:
+                    bookmaker_links[market.bookmaker] = market.link_url
+            home = str(event.get("home") or event.get("homeTeam") or "Casa")
+            away = str(event.get("away") or event.get("awayTeam") or "Fora")
+            league_data = event.get("league", {}) if isinstance(event.get("league"), dict) else {}
+            league = str(league_data.get("name") or event.get("league") or "-")
+            game = GameSnapshot(
+                event_id=event_id,
+                fixture_id=None,
+                league=league,
+                home=home,
+                away=away,
+                minute=None,
+                score_home=None,
+                score_away=None,
+                stats={},
+                markets=[],
+            )
+            decision = Decision(
+                True,
+                0,
+                "Vitoria casa",
+                "home",
+                chosen.bookmaker,
+                chosen.odd,
+                chosen.line,
+                "TESTE FORCADO: usado apenas para validar alerta, odds e botao direto da casa. Nao e entrada oficial.",
+                "teste",
+                chosen.alert_key,
+                bookmaker_links,
+            )
+            message = "TESTE DE ENVIO - NAO APOSTAR\n\n" + format_alert(game, decision)
+            await send_message(
+                settings.telegram_bot_token,
+                settings.telegram_chat_id,
+                message,
+                with_bookmakers=True,
+                bookmaker_links=decision.bookmaker_links,
+            )
+            link_count = len(decision.bookmaker_links)
+            await update.message.reply_text(f"Teste enviado. Links diretos recebidos da Odds-API: {link_count}.")
+            return
+
+        await update.message.reply_text("Nao achei vitoria da casa com odd >= 1.80 nos jogos ao vivo retornados pela Odds-API.")
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Erro HTTP no teste de vitoria casa: %s", exc.response.status_code)
+        await update.message.reply_text(f"Erro HTTP no teste de vitoria casa: {exc.response.status_code}")
+    except Exception as exc:
+        logger.exception("Erro no teste de vitoria casa")
+        await update.message.reply_text(f"Erro no teste de vitoria casa: {type(exc).__name__}")
+    finally:
+        await http.close()
+
+
 async def envcheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     presence = settings_presence(settings)
@@ -1148,6 +1230,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("performance", performance_cmd))
     app.add_handler(CommandHandler("scan", scan_cmd))
     app.add_handler(CommandHandler("force_live_alert", force_live_alert_cmd))
+    app.add_handler(CommandHandler("force_home_win_test", with_timeout(force_home_win_test_cmd, 60, "/force_home_win_test")))
     app.add_handler(CommandHandler("test_analysis_no_odds", test_analysis_no_odds_cmd))
     app.add_handler(CommandHandler("official_no_odds", with_timeout(official_no_odds_cmd, 60, "/official_no_odds")))
     app.add_handler(CommandHandler("force_verified_entry", with_timeout(force_verified_entry_cmd, 60, "/force_verified_entry")))
