@@ -689,7 +689,13 @@ async def debug_sportmonks_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
             suffix = f" | {item['message']}" if item["message"] else ""
             diag_lines.append(f"- {item['label']}: HTTP {item['status']} | itens={item['count']}{suffix}")
 
-        live = await client.live_scores()
+        try:
+            live = await client.live_scores()
+        except httpx.HTTPStatusError as exc:
+            await update.message.reply_text(
+                ("\n".join(diag_lines) + f"\n\nlive_scores parse falhou com HTTP {exc.response.status_code}.")[:3900]
+            )
+            return
         if not live:
             await update.message.reply_text("\n".join(diag_lines)[:3900])
             return
