@@ -113,7 +113,7 @@ class SportmonksClient:
             f"{self.base_url}/livescores/inplay",
             params={
                 "api_token": self.api_token,
-                "include": "participants,statistics.type,scores",
+                "include": "participants;statistics.type;scores",
             },
         )
         return data.get("data", []) if isinstance(data, dict) else []
@@ -123,7 +123,7 @@ class SportmonksClient:
             f"{self.base_url}/fixtures/{fixture_id}",
             params={
                 "api_token": self.api_token,
-                "include": "participants,statistics",
+                "include": "participants;statistics",
             },
         )
         fixture = data.get("data") if isinstance(data, dict) else None
@@ -139,12 +139,17 @@ class SportmonksClient:
             (
                 "livescores/inplay com stats",
                 f"{self.base_url}/livescores/inplay",
-                {"api_token": self.api_token, "include": "participants,statistics.type,scores"},
+                {"api_token": self.api_token, "include": "participants;statistics.type;scores"},
             ),
             (
                 "fixtures/date hoje",
                 f"{self.base_url}/fixtures/date/{today}",
                 {"api_token": self.api_token, "include": "participants"},
+            ),
+            (
+                "fixtures/date hoje com stats",
+                f"{self.base_url}/fixtures/date/{today}",
+                {"api_token": self.api_token, "include": "participants;statistics"},
             ),
         ]
         results = []
