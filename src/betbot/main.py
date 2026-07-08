@@ -167,7 +167,11 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
         logger.info("API-Football nao retornou jogos ao vivo.")
         return []
 
-    odds_events = await odds_api.live_events(settings.sport, settings.max_live_events)
+    try:
+        odds_events = await odds_api.live_events(settings.sport, settings.max_live_events)
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Odds-API live events falhou com HTTP %s; continuando sem odds.", exc.response.status_code)
+        odds_events = []
     sportmonks_live = await load_sportmonks_live(settings, odds_api.http)
     sportmonks_client = make_sportmonks_client(settings, odds_api.http)
     thestatsapi_live = await load_thestatsapi_live(settings, odds_api.http)
@@ -461,7 +465,10 @@ async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except httpx.HTTPStatusError as exc:
         logger.warning("Erro HTTP ao forcar varredura: %s", exc.response.status_code)
         if exc.response.status_code == 429:
-            await update.message.reply_text("Odds-API retornou 429 Too Many Requests. Aguarde alguns minutos ou aumente POLL_SECONDS.")
+            await update.message.reply_text(
+                "Odds-API retornou 429 Too Many Requests. Isso geralmente e limite da Odds-API, muitas vezes por hora. "
+                "A varredura principal agora tenta continuar sem odds quando esse erro acontece."
+            )
         else:
             await update.message.reply_text(f"Erro HTTP ao forcar varredura: {exc.response.status_code}")
     except Exception as exc:
