@@ -9,7 +9,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 from .ai import analyze_game
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient
-from .config import load_settings, require_runtime_settings
+from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .markets import flatten_markets
 from .matching import find_matching_fixture
 from .models import GameSnapshot
@@ -146,6 +146,15 @@ async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         storage.close()
 
 
+async def envcheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    presence = settings_presence(settings)
+    lines = ["Variaveis vistas pelo bot:"]
+    for name, ok in presence.items():
+        lines.append(f"{name}: {'OK' if ok else 'AUSENTE'}")
+    await update.message.reply_text("\n".join(lines))
+
+
 async def scheduled_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     storage = Storage(settings.database_path)
@@ -168,7 +177,8 @@ async def startup_alert_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def run_bot() -> None:
     settings = load_settings()
-    require_runtime_settings(settings)
+    require_telegram_settings(settings)
+    logger.info("Variaveis no startup: %s", settings_presence(settings))
     if settings.dry_run:
         logger.warning("DRY_RUN=true: o bot nao enviara mensagens. Use 'once' para testar a coleta.")
 
@@ -177,6 +187,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("last", last_cmd))
     app.add_handler(CommandHandler("performance", performance_cmd))
     app.add_handler(CommandHandler("scan", scan_cmd))
+    app.add_handler(CommandHandler("envcheck", envcheck_cmd))
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=5)
     if settings.startup_alert and not settings.dry_run:
         app.job_queue.run_once(startup_alert_job, when=1)

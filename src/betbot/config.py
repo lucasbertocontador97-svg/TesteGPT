@@ -62,3 +62,24 @@ def require_runtime_settings(settings: Settings) -> None:
         missing.append("TELEGRAM_CHAT_ID")
     if missing:
         raise RuntimeError("Variaveis obrigatorias ausentes: " + ", ".join(missing))
+
+
+def require_telegram_settings(settings: Settings) -> None:
+    missing = []
+    if not settings.telegram_bot_token and not settings.dry_run:
+        missing.append("TELEGRAM_BOT_TOKEN")
+    if not settings.telegram_chat_id and not settings.dry_run:
+        missing.append("TELEGRAM_CHAT_ID")
+    if missing:
+        raise RuntimeError("Variaveis obrigatorias ausentes: " + ", ".join(missing))
+
+
+def settings_presence(settings: Settings) -> dict[str, bool]:
+    return {
+        "TELEGRAM_BOT_TOKEN": bool(settings.telegram_bot_token),
+        "TELEGRAM_CHAT_ID": bool(settings.telegram_chat_id),
+        "ODDS_API_KEY": bool(settings.odds_api_key),
+        "API_FOOTBALL_KEY": bool(settings.api_football_key),
+        "OPENAI_API_KEY": bool(settings.openai_api_key),
+        "DRY_RUN_FALSE": not settings.dry_run,
+    }
