@@ -78,6 +78,33 @@ class Storage:
         )
         self.conn.commit()
 
+    def save_manual_alert(self, game: GameSnapshot, decision: Decision) -> None:
+        self.conn.execute(
+            """
+            insert or ignore into alerts (
+                event_id, fixture_id, home, away, minute, market, selection, bookmaker,
+                odd, line, confidence, reason, stake, alert_key
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                game.event_id,
+                game.fixture_id,
+                game.home,
+                game.away,
+                game.minute,
+                decision.market,
+                decision.selection,
+                decision.bookmaker,
+                decision.odd,
+                decision.line,
+                decision.confidence,
+                decision.reason,
+                decision.stake,
+                decision.alert_key,
+            ),
+        )
+        self.conn.commit()
+
     def last_alerts(self, limit: int = 5) -> list[dict[str, Any]]:
         rows = self.conn.execute("select * from alerts order by id desc limit ?", (limit,)).fetchall()
         return [dict(row) for row in rows]

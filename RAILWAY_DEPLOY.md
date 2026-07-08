@@ -65,6 +65,7 @@ No Telegram, teste:
 /scan
 /force_live_alert
 /test_analysis_no_odds
+/official_no_odds
 /envcheck
 ```
 

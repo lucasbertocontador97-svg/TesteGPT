@@ -322,6 +322,101 @@ async def test_analysis_no_odds_cmd(update: Update, context: ContextTypes.DEFAUL
         await http.close()
 
 
+async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    storage = Storage(settings.database_path)
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Buscando entrada oficial sem consultar odds...")
+        api_football = ApiFootballClient(settings.api_football_key, http)
+        fixtures = await api_football.live_fixtures()
+        if not fixtures:
+            await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
+            return
+
+        for fixture in fixtures[: settings.odds_detail_limit]:
+            fixture_id = fixture.get("fixture", {}).get("id")
+            if not fixture_id:
+                continue
+            stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id)))
+            score_home, score_away = extract_score(fixture)
+            teams = fixture.get("teams", {})
+            league = fixture.get("league", {}).get("name", "")
+            game = GameSnapshot(
+                event_id=f"api-football-{fixture_id}",
+                fixture_id=fixture_id,
+                league=str(league or ""),
+                home=str(teams.get("home", {}).get("name") or ""),
+                away=str(teams.get("away", {}).get("name") or ""),
+                minute=extract_minute(fixture),
+                score_home=score_home,
+                score_away=score_away,
+                stats=stats,
+                markets=[],
+            )
+            idea = await suggest_market_without_odds(
+                game,
+                api_key=settings.openai_api_key,
+                model=settings.openai_model,
+                min_confidence=settings.min_confidence,
+            )
+            if not idea.should_check_odds:
+                logger.info("Sem entrada sem odds: %s x %s - %s", game.home, game.away, idea.reason)
+                continue
+
+            market_label = {
+                ("goals", "over"): "Mais gols",
+                ("goals", "under"): "Menos gols",
+                ("corners", "over"): "Mais escanteios",
+                ("corners", "under"): "Menos escanteios",
+            }.get((idea.market_family, idea.selection), f"{idea.market_family} {idea.selection}")
+            alert_key = f"no-odds|{game.fixture_id}|{idea.market_family}|{idea.selection}|{game.minute or ''}"
+            if storage.seen_alert(alert_key):
+                await update.message.reply_text("A IA encontrou uma entrada sem odds, mas ela ja foi enviada antes.")
+                return
+
+            decision = Decision(
+                True,
+                idea.confidence,
+                market_label,
+                idea.selection,
+                "Conferir manualmente",
+                0.0,
+                None,
+                idea.reason,
+                idea.stake,
+                alert_key,
+            )
+            storage.save_manual_alert(game, decision)
+            minute = "?" if game.minute is None else f"{game.minute}'"
+            score = f"{game.score_home if game.score_home is not None else '?'}x{game.score_away if game.score_away is not None else '?'}"
+            await update.message.reply_text(
+                "ENTRADA OFICIAL - SEM ODD\n\n"
+                "A IA escolheu o mercado pela leitura do jogo ao vivo. Confira a odd manualmente antes de entrar.\n\n"
+                f"Jogo: {game.home} x {game.away}\n"
+                f"Liga: {game.league or '-'}\n"
+                f"Tempo: {minute}\n"
+                f"Placar: {score}\n"
+                f"Mercado indicado: {market_label}\n"
+                f"Direcao: {idea.selection}\n"
+                f"Confianca: {idea.confidence}%\n"
+                f"Stake: {idea.stake}\n\n"
+                f"Motivo: {idea.reason}"
+            )
+            return
+
+        await update.message.reply_text("A IA analisou os jogos ao vivo, mas nao encontrou entrada oficial sem odds com confianca suficiente.")
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Erro HTTP na entrada sem odds: %s", exc.response.status_code)
+        await update.message.reply_text(f"Erro HTTP na entrada sem odds: {exc.response.status_code}")
+    except Exception as exc:
+        logger.exception("Erro na entrada oficial sem odds")
+        await update.message.reply_text(f"Erro na entrada oficial sem odds: {type(exc).__name__}")
+    finally:
+        await http.close()
+        storage.close()
+
+
 async def scheduled_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     storage = Storage(settings.database_path)
@@ -358,6 +453,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("scan", scan_cmd))
     app.add_handler(CommandHandler("force_live_alert", force_live_alert_cmd))
     app.add_handler(CommandHandler("test_analysis_no_odds", test_analysis_no_odds_cmd))
+    app.add_handler(CommandHandler("official_no_odds", official_no_odds_cmd))
     app.add_handler(CommandHandler("envcheck", envcheck_cmd))
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=min(60, settings.poll_seconds))
     if settings.startup_alert and not settings.dry_run:
