@@ -13,6 +13,7 @@ class MarketOption:
     selection: str
     odd: float
     line: float | None = None
+    link_url: str | None = None
     updated_at: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -48,6 +49,7 @@ class Decision:
     reason: str
     stake: str
     alert_key: str | None = None
+    bookmaker_links: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

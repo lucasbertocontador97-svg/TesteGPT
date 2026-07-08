@@ -56,6 +56,7 @@ class OddsApiClient:
                 "apiKey": self.api_key,
                 "eventIds": ",".join(event_ids[:10]),
                 "bookmakers": ",".join(bookmakers),
+                "includeLinks": "true",
             },
         )
         return data if isinstance(data, list) else []
@@ -67,6 +68,7 @@ class OddsApiClient:
                 "apiKey": self.api_key,
                 "eventId": event_id,
                 "bookmakers": ",".join(bookmakers),
+                "includeLinks": "true",
             },
         )
         return data if isinstance(data, dict) else None

@@ -21,6 +21,39 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _extract_url(value: Any) -> str | None:
+    if isinstance(value, str) and value.startswith(("http://", "https://")):
+        return value
+    if isinstance(value, dict):
+        for key, child in value.items():
+            lowered = str(key).lower()
+            if any(marker in lowered for marker in ("link", "url", "deeplink", "betslip")):
+                found = _extract_url(child)
+                if found:
+                    return found
+        for child in value.values():
+            found = _extract_url(child)
+            if found:
+                return found
+    if isinstance(value, list):
+        for child in value:
+            found = _extract_url(child)
+            if found:
+                return found
+    return None
+
+
+def _extract_odd_and_link(value: Any) -> tuple[float | None, str | None]:
+    if isinstance(value, dict):
+        odd = None
+        for key in ("odd", "odds", "price", "decimal", "value"):
+            odd = _to_float(value.get(key))
+            if odd is not None:
+                break
+        return odd, _extract_url(value)
+    return _to_float(value), None
+
+
 def _market_allowed(name: str) -> bool:
     lowered = name.lower()
     return any(word in lowered for word in GOAL_WORDS + CORNER_WORDS + ASIAN_WORDS)
@@ -72,9 +105,10 @@ def flatten_markets(
                     selection = _clean_selection(str(key))
                     if selection not in ALLOWED_SELECTIONS:
                         continue
-                    odd = _to_float(value)
+                    odd, value_link = _extract_odd_and_link(value)
                     if odd is None or odd < min_odd:
                         continue
+                    link_url = value_link or _extract_url(row) or _extract_url(market)
                     options.append(
                         MarketOption(
                             event_id=event_id,
@@ -84,6 +118,7 @@ def flatten_markets(
                             selection=selection,
                             odd=odd,
                             line=line,
+                            link_url=link_url,
                             updated_at=updated_at,
                             raw=row,
                         )
@@ -118,9 +153,10 @@ def flatten_all_markets(
                     selection = _clean_selection(str(key))
                     if selection not in ALLOWED_SELECTIONS:
                         continue
-                    odd = _to_float(value)
+                    odd, value_link = _extract_odd_and_link(value)
                     if odd is None or odd < min_odd:
                         continue
+                    link_url = value_link or _extract_url(row) or _extract_url(market)
                     options.append(
                         MarketOption(
                             event_id=event_id,
@@ -130,6 +166,7 @@ def flatten_all_markets(
                             selection=selection,
                             odd=odd,
                             line=line,
+                            link_url=link_url,
                             updated_at=updated_at,
                             raw=row,
                         )

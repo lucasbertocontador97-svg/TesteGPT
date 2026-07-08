@@ -243,6 +243,10 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 logger.info("Sem odd >= %.2f para sinal %s/%s em %s x %s", settings.min_odd, target_family, target_selection, game.home, game.away)
                 continue
             chosen = sorted(compatible, key=lambda market: market.odd, reverse=True)[0]
+            bookmaker_links = {}
+            for market in sorted(compatible, key=lambda item: item.odd, reverse=True):
+                if market.link_url and market.bookmaker not in bookmaker_links:
+                    bookmaker_links[market.bookmaker] = market.link_url
             decision = Decision(
                 True,
                 target_confidence,
@@ -254,6 +258,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 target_reason,
                 target_stake,
                 chosen.alert_key,
+                bookmaker_links,
             )
             if storage.seen_alert(decision.alert_key):
                 logger.info("Entrada repetida ignorada: %s", decision.alert_key)
@@ -263,7 +268,13 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
             if settings.dry_run or not send_alerts:
                 logger.info("DRY_RUN alerta:\n%s", message)
             else:
-                await send_message(settings.telegram_bot_token, settings.telegram_chat_id, message, with_bookmakers=True)
+                await send_message(
+                    settings.telegram_bot_token,
+                    settings.telegram_chat_id,
+                    message,
+                    with_bookmakers=True,
+                    bookmaker_links=decision.bookmaker_links,
+                )
             sent += 1
 
         for alert in storage.pending_alerts():
@@ -872,12 +883,15 @@ async def debug_odds_flow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
             examples = []
             for market in markets_all[:5]:
                 line = "" if market.line is None else f" {market.line:g}"
-                examples.append(f"{market.bookmaker}:{market.market_name}/{market.selection}{line}@{market.odd:.2f}")
+                link_flag = "link=sim" if market.link_url else "link=nao"
+                examples.append(f"{market.bookmaker}:{market.market_name}/{market.selection}{line}@{market.odd:.2f} {link_flag}")
             if compatible:
                 best = sorted(compatible, key=lambda market: market.odd, reverse=True)[0]
+                link_count = sum(1 for market in compatible if market.link_url)
                 lines.append(
                     f"- {home} x {away} {score} {minute or '?'}': APROVADO {signal.strategy} linha {signal.line:g}; "
-                    f"odd compativel {best.bookmaker} {best.market_name}/{best.selection} {best.line or signal.line}@{best.odd:.2f}"
+                    f"odd compativel {best.bookmaker} {best.market_name}/{best.selection} {best.line or signal.line}@{best.odd:.2f}; "
+                    f"links diretos: {link_count}"
                 )
             else:
                 lines.append(
