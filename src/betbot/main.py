@@ -473,6 +473,121 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         storage.close()
 
 
+async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    storage = Storage(settings.database_path)
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Buscando entrada veridica em jogos ao vivo...")
+        api_football = ApiFootballClient(settings.api_football_key, http)
+        fixtures = await api_football.live_fixtures()
+        if not fixtures:
+            await update.message.reply_text("Nao ha jogos ao vivo agora na API-Football.")
+            return
+
+        candidates = []
+        for fixture in fixtures[: max(settings.odds_detail_limit, 10)]:
+            fixture_id = fixture.get("fixture", {}).get("id")
+            if not fixture_id:
+                continue
+            stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id)))
+            score_home, score_away = extract_score(fixture)
+            teams = fixture.get("teams", {})
+            league = fixture.get("league", {}).get("name", "")
+            game = GameSnapshot(
+                event_id=f"verified-api-football-{fixture_id}",
+                fixture_id=fixture_id,
+                league=str(league or ""),
+                home=str(teams.get("home", {}).get("name") or ""),
+                away=str(teams.get("away", {}).get("name") or ""),
+                minute=extract_minute(fixture),
+                score_home=score_home,
+                score_away=score_away,
+                stats=stats,
+                markets=[],
+            )
+            if not has_actionable_stats(game.stats):
+                continue
+            required_confidence = settings.min_confidence
+            if is_high_variance_match(game.league, game.home, game.away):
+                required_confidence = max(required_confidence, 85)
+            if game.minute is not None and game.minute < 25:
+                required_confidence = max(required_confidence, 85)
+            signal = evaluate_game(
+                minute=game.minute,
+                score_home=game.score_home,
+                score_away=game.score_away,
+                stats=game.stats,
+                min_confidence=required_confidence,
+            )
+            if signal.approved:
+                candidates.append((signal, game, required_confidence))
+
+        if not candidates:
+            await update.message.reply_text(
+                "Nao ha entrada veridica agora: os jogos ao vivo nao passaram nos filtros de estatistica e probabilidade."
+            )
+            return
+
+        signal, game, required_confidence = sorted(candidates, key=lambda item: (item[0].score, item[0].probability), reverse=True)[0]
+        market_label = {
+            ("goals", "over"): "Mais gols",
+            ("goals", "under"): "Menos gols",
+            ("corners", "over"): "Mais escanteios",
+            ("corners", "under"): "Menos escanteios",
+        }.get((signal.market_family, signal.selection), f"{signal.market_family} {signal.selection}")
+        alert_key = f"verified|{game.fixture_id}|{signal.market_family}|{signal.selection}|{signal.line}|{game.minute or ''}"
+        if storage.seen_alert(alert_key):
+            await update.message.reply_text("A melhor entrada veridica encontrada ja foi enviada antes.")
+            return
+
+        ai_reading = await analyze_live_game_without_odds(game, api_key=settings.openai_api_key, model=settings.openai_model)
+        decision = Decision(
+            True,
+            signal.confidence,
+            market_label,
+            signal.selection,
+            "Conferir manualmente",
+            0.0,
+            signal.line,
+            signal.reason,
+            "baixa",
+            alert_key,
+        )
+        storage.save_manual_alert(game, decision)
+
+        minute = "?" if game.minute is None else f"{game.minute}'"
+        score = f"{game.score_home if game.score_home is not None else '?'}x{game.score_away if game.score_away is not None else '?'}"
+        line_label = "" if signal.line is None else f" {signal.line:g}"
+        await update.message.reply_text(
+            "ENTRADA VERIFICADA - SEM ODD\n\n"
+            "Entrada baseada em jogo ao vivo real, estatisticas disponiveis e motor matematico. Confira a odd manualmente antes de entrar.\n\n"
+            f"Jogo: {game.home} x {game.away}\n"
+            f"Liga: {game.league or '-'}\n"
+            f"Tempo: {minute}\n"
+            f"Placar: {score}\n"
+            f"Mercado: {market_label}{line_label}\n"
+            f"Direcao: {signal.selection}\n"
+            f"Probabilidade matematica: {signal.probability:.0%}\n"
+            f"Score: {signal.score}\n"
+            f"Estrategia: {signal.strategy}\n"
+            f"Filtro minimo: {required_confidence}%\n"
+            "Stake: baixa\n\n"
+            f"Estatisticas usadas:\n{compact_stats_summary(game.stats)}\n\n"
+            f"Motivo matematico: {signal.reason}\n\n"
+            f"Leitura IA:\n{ai_reading}"
+        )
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Erro HTTP na entrada verificada: %s", exc.response.status_code)
+        await update.message.reply_text(f"Erro HTTP na entrada verificada: {exc.response.status_code}")
+    except Exception as exc:
+        logger.exception("Erro ao buscar entrada verificada")
+        await update.message.reply_text(f"Erro ao buscar entrada verificada: {type(exc).__name__}")
+    finally:
+        await http.close()
+        storage.close()
+
+
 async def scheduled_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     storage = Storage(settings.database_path)
@@ -510,6 +625,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("force_live_alert", force_live_alert_cmd))
     app.add_handler(CommandHandler("test_analysis_no_odds", test_analysis_no_odds_cmd))
     app.add_handler(CommandHandler("official_no_odds", official_no_odds_cmd))
+    app.add_handler(CommandHandler("force_verified_entry", force_verified_entry_cmd))
     app.add_handler(CommandHandler("envcheck", envcheck_cmd))
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=min(60, settings.poll_seconds))
     if settings.startup_alert and not settings.dry_run:
