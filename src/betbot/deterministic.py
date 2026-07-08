@@ -59,6 +59,13 @@ def _dead_game(minute: int, total_shots: float, shots_on: float, dangerous: floa
     return total_shots <= 5 and shots_on <= 1 and dangerous <= 20
 
 
+def _effective_pressure(dangerous: float, attacks: float, total_shots: float, shots_on: float) -> tuple[float, str]:
+    if dangerous > 0:
+        return dangerous, f"ataques perigosos {dangerous:g}"
+    estimated = min(80.0, attacks * 0.35 + total_shots * 1.8 + shots_on * 3.0)
+    return estimated, f"pressao estimada {estimated:g} por ataques {attacks:g}, chutes {total_shots:g}, no gol {shots_on:g}"
+
+
 def _goal_lambda(minute: int, current_goals: int, total_shots: float, shots_on: float, dangerous: float) -> float:
     remaining = max(0, 90 - minute)
     base = 2.55 / 90 * remaining
@@ -90,6 +97,25 @@ def _corner_lambda(minute: int, corners: float, total_shots: float, dangerous: f
     return max(0.05, base * pace)
 
 
+def _next_goal_conviction(probability_score: int, total_shots: float, shots_on: float, corners: float, pressure: float) -> int:
+    bonus = 0
+    if shots_on >= 6:
+        bonus += 10
+    elif shots_on >= 4:
+        bonus += 6
+    if total_shots >= 14:
+        bonus += 8
+    elif total_shots >= 10:
+        bonus += 4
+    if corners >= 5:
+        bonus += 4
+    if pressure >= 65:
+        bonus += 8
+    elif pressure >= 45:
+        bonus += 5
+    return min(95, probability_score + bonus)
+
+
 def evaluate_game(
     *,
     minute: int | None,
@@ -107,14 +133,16 @@ def evaluate_game(
     shots_on = _sum_stat(stats, ("Shots on Goal", "Shots on target"))
     total_shots = _sum_stat(stats, ("Total Shots",))
     dangerous = _sum_stat(stats, ("Dangerous Attacks",))
+    attacks = _sum_stat(stats, ("Attacks",))
     corners = _sum_stat(stats, ("Corner Kicks", "Corners"))
+    pressure, pressure_label = _effective_pressure(dangerous, attacks, total_shots, shots_on)
 
-    if _dead_game(minute, total_shots, shots_on, dangerous):
+    if _dead_game(minute, total_shots, shots_on, pressure):
         return DeterministicSignal(False, "none", "none", None, 0, 0, 0, "Jogo morto: baixo volume ofensivo e pouca pressao.", "dead_game")
 
     candidates: list[DeterministicSignal] = []
 
-    goal_mean = _goal_lambda(minute, current_goals, total_shots, shots_on, dangerous)
+    goal_mean = _goal_lambda(minute, current_goals, total_shots, shots_on, pressure)
     for line, threshold, name in (
         (1.5, 0.75, "Over 1.5 FT"),
         (2.5, 0.72, "Over 2.5 FT"),
@@ -134,7 +162,7 @@ def evaluate_game(
                     prob,
                     score,
                     score,
-                    f"Poisson {prob:.0%} para over {line:g}; chutes {total_shots:g}, no gol {shots_on:g}, ataques perigosos {dangerous:g}.",
+                    f"Poisson {prob:.0%} para over {line:g}; chutes {total_shots:g}, no gol {shots_on:g}, {pressure_label}.",
                     name,
                 )
             )
@@ -143,7 +171,8 @@ def evaluate_game(
         next_goal_line = current_goals + 0.5
         prob = _poisson_at_least(goal_mean, 1)
         score = round(prob * 100)
-        if prob >= 0.50 and score >= min_confidence:
+        conviction = _next_goal_conviction(score, total_shots, shots_on, corners, pressure)
+        if prob >= 0.50 and conviction >= min_confidence:
             candidates.append(
                 DeterministicSignal(
                     True,
@@ -151,14 +180,14 @@ def evaluate_game(
                     "over",
                     next_goal_line,
                     prob,
-                    score,
-                    score,
-                    f"Probabilidade {prob:.0%} de pelo menos mais um gol; pressao medida por chutes {total_shots:g} e ataques perigosos {dangerous:g}.",
+                    conviction,
+                    conviction,
+                    f"Probabilidade {prob:.0%} de pelo menos mais um gol; conviccao {conviction} por chutes {total_shots:g}, no gol {shots_on:g}, escanteios {corners:g} e {pressure_label}.",
                     "Asian Goal +0.5 FT",
                 )
             )
 
-    corner_mean = _corner_lambda(minute, corners, total_shots, dangerous)
+    corner_mean = _corner_lambda(minute, corners, total_shots, pressure)
     if 32 <= minute <= 40 or 78 <= minute <= 86:
         prob = _poisson_at_least(corner_mean, 1)
         threshold = 0.60 if minute <= 40 else 0.70
@@ -173,7 +202,7 @@ def evaluate_game(
                     prob,
                     score,
                     score,
-                    f"Poisson {prob:.0%} para mais um escanteio; escanteios atuais {corners:g}, ataques perigosos {dangerous:g}.",
+                    f"Poisson {prob:.0%} para mais um escanteio; escanteios atuais {corners:g}, {pressure_label}.",
                     "Asian Corner +0.5 HT" if minute <= 40 else "Asian Corner +0.5 FT",
                 )
             )
@@ -187,7 +216,7 @@ def evaluate_game(
             0,
             0,
             0,
-            f"Nenhum mercado passou nos thresholds matematicos. Chutes {total_shots:g}, no gol {shots_on:g}, escanteios {corners:g}, ataques perigosos {dangerous:g}.",
+            f"Nenhum mercado passou nos thresholds matematicos. Chutes {total_shots:g}, no gol {shots_on:g}, escanteios {corners:g}, {pressure_label}.",
             "no_signal",
         )
 
