@@ -296,10 +296,23 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
             if storage.seen_alert(decision.alert_key):
                 logger.info("Entrada repetida ignorada: %s", decision.alert_key)
                 continue
+            if storage.seen_similar_alert(game, decision):
+                logger.info(
+                    "Entrada similar repetida ignorada: %s x %s | %s %s %s",
+                    game.home,
+                    game.away,
+                    decision.market,
+                    decision.selection,
+                    decision.line,
+                )
+                continue
             if decision.odd > 0:
                 alert_id = storage.save_alert(game, decision)
             else:
                 alert_id = storage.save_manual_alert(game, decision)
+            if alert_id is None:
+                logger.info("Entrada repetida ignorada apos insert: %s", decision.alert_key)
+                continue
             message = format_alert(game, decision)
             if settings.dry_run or not send_alerts:
                 logger.info("DRY_RUN alerta:\n%s", message)

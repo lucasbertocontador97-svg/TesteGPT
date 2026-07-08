@@ -56,6 +56,49 @@ class Storage:
         row = self.conn.execute("select 1 from alerts where alert_key = ?", (alert_key,)).fetchone()
         return row is not None
 
+    @staticmethod
+    def _market_group(market: str) -> str:
+        lowered = str(market or "").lower()
+        if any(word in lowered for word in ("corner", "escanteio")):
+            return "corners"
+        if any(word in lowered for word in ("goal", "gol")):
+            return "goals"
+        return lowered.strip()
+
+    @staticmethod
+    def _same_line(left: Any, right: Any) -> bool:
+        if left is None and right is None:
+            return True
+        if left is None or right is None:
+            return False
+        try:
+            return abs(float(left) - float(right)) <= 0.01
+        except (TypeError, ValueError):
+            return str(left) == str(right)
+
+    def seen_similar_alert(self, game: GameSnapshot, decision: Decision) -> bool:
+        if game.fixture_id is None:
+            return False
+        rows = self.conn.execute(
+            """
+            select market, selection, line
+            from alerts
+            where fixture_id = ?
+              and status in ('SENT', 'WON', 'LOST', 'PUSH')
+            """,
+            (game.fixture_id,),
+        ).fetchall()
+        wanted_market = self._market_group(decision.market)
+        wanted_selection = str(decision.selection or "").lower()
+        for row in rows:
+            if self._market_group(row["market"]) != wanted_market:
+                continue
+            if str(row["selection"] or "").lower() != wanted_selection:
+                continue
+            if self._same_line(row["line"], decision.line):
+                return True
+        return False
+
     def _alert_id(self, alert_key: str | None) -> int | None:
         if not alert_key:
             return None
