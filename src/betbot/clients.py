@@ -102,7 +102,7 @@ class ApiFootballClient:
 
 
 class SportmonksClient:
-    base_url = "https://api.sportmonks.com/api/v3/football"
+    base_url = "https://api.sportmonks.com/v3/football"
 
     def __init__(self, api_token: str, http: HttpJsonClient) -> None:
         self.api_token = api_token
@@ -117,6 +117,17 @@ class SportmonksClient:
             },
         )
         return data.get("data", []) if isinstance(data, dict) else []
+
+    async def fixture_by_id(self, fixture_id: int) -> dict[str, Any] | None:
+        data = await self.http.get_json(
+            f"{self.base_url}/fixtures/{fixture_id}",
+            params={
+                "api_token": self.api_token,
+                "include": "participants,statistics",
+            },
+        )
+        fixture = data.get("data") if isinstance(data, dict) else None
+        return fixture if isinstance(fixture, dict) else None
 
     async def diagnostic(self, today: str) -> list[dict[str, Any]]:
         checks = [
