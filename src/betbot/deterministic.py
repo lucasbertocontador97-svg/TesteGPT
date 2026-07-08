@@ -149,19 +149,19 @@ def _next_corner_conviction(
     if shots_on >= 5:
         bonus += 4
 
-    if 32 <= minute <= 44:
+    if 32 <= minute <= 39:
         bonus += 3
-    elif 78 <= minute <= 86:
+    elif 78 <= minute <= 85:
         bonus += 5
 
     return min(95, probability_score + bonus)
 
 
 def _next_corner_window(minute: int) -> tuple[str, float] | None:
-    if 32 <= minute <= 44:
+    if 32 <= minute <= 39:
         return "Asian Corner +0.5 HT", 0.55
-    if 78 <= minute <= 86:
-        return "Asian Corner +0.5 FT", 0.60
+    if 78 <= minute <= 85:
+        return "Asian Corner +0.5 FT", 0.55
     return None
 
 
