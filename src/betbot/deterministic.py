@@ -66,8 +66,8 @@ def _effective_pressure(dangerous: float, attacks: float, total_shots: float, sh
     return estimated, f"pressao estimada {estimated:g} por ataques {attacks:g}, chutes {total_shots:g}, no gol {shots_on:g}"
 
 
-def _goal_lambda(minute: int, current_goals: int, total_shots: float, shots_on: float, dangerous: float) -> float:
-    remaining = max(0, 90 - minute)
+def _goal_lambda_to(minute: int, current_goals: int, total_shots: float, shots_on: float, dangerous: float, end_minute: int) -> float:
+    remaining = max(0, end_minute - minute)
     base = 2.55 / 90 * remaining
     pace = 1.0
     if shots_on >= 4:
@@ -81,6 +81,10 @@ def _goal_lambda(minute: int, current_goals: int, total_shots: float, shots_on: 
     if minute >= 70 and current_goals <= 2:
         pace += 0.05
     return max(0.05, base * pace)
+
+
+def _goal_lambda(minute: int, current_goals: int, total_shots: float, shots_on: float, dangerous: float) -> float:
+    return _goal_lambda_to(minute, current_goals, total_shots, shots_on, dangerous, 90)
 
 
 def _corner_lambda(minute: int, corners: float, total_shots: float, dangerous: float) -> float:
@@ -114,6 +118,58 @@ def _next_goal_conviction(probability_score: int, total_shots: float, shots_on: 
     elif pressure >= 45:
         bonus += 5
     return min(95, probability_score + bonus)
+
+
+def _nil_nil_goal_conviction(
+    *,
+    probability_score: int,
+    minute: int,
+    total_shots: float,
+    shots_on: float,
+    corners: float,
+    pressure: float,
+) -> int:
+    bonus = 0
+    if shots_on >= 5:
+        bonus += 16
+    elif shots_on >= 3:
+        bonus += 10
+    elif shots_on >= 2:
+        bonus += 6
+
+    if total_shots >= 12:
+        bonus += 12
+    elif total_shots >= 8:
+        bonus += 7
+
+    if pressure >= 65:
+        bonus += 14
+    elif pressure >= 50:
+        bonus += 9
+    elif pressure >= 40:
+        bonus += 5
+
+    if corners >= 5:
+        bonus += 6
+    elif corners >= 3:
+        bonus += 3
+
+    if 32 <= minute <= 39:
+        bonus += 5
+    elif 62 <= minute <= 80:
+        bonus += 4
+
+    return min(95, probability_score + bonus)
+
+
+def _nil_nil_goal_window(minute: int, current_goals: int) -> tuple[str, int, float] | None:
+    if current_goals != 0:
+        return None
+    if 32 <= minute <= 39:
+        return "Over 0.5 HT", 45, 0.30
+    if 62 <= minute <= 80:
+        return "Over 0.5 FT", 90, 0.45
+    return None
 
 
 def _next_corner_conviction(
@@ -165,6 +221,16 @@ def _next_corner_window(minute: int) -> tuple[str, float] | None:
     return None
 
 
+def _candidate_priority(signal: DeterministicSignal) -> int:
+    if signal.strategy in {"Over 0.5 HT", "Over 0.5 FT"}:
+        return 4
+    if signal.strategy.startswith("Asian Corner"):
+        return 3
+    if signal.strategy.startswith("Asian Goal"):
+        return 2
+    return 1
+
+
 def evaluate_game(
     *,
     minute: int | None,
@@ -192,6 +258,35 @@ def evaluate_game(
     candidates: list[DeterministicSignal] = []
 
     goal_mean = _goal_lambda(minute, current_goals, total_shots, shots_on, pressure)
+    nil_nil_goal_window = _nil_nil_goal_window(minute, current_goals)
+    if nil_nil_goal_window:
+        strategy_name, end_minute, threshold = nil_nil_goal_window
+        target_goal_mean = _goal_lambda_to(minute, current_goals, total_shots, shots_on, pressure, end_minute)
+        prob = _poisson_at_least(target_goal_mean, 1)
+        score = round(prob * 100)
+        conviction = _nil_nil_goal_conviction(
+            probability_score=score,
+            minute=minute,
+            total_shots=total_shots,
+            shots_on=shots_on,
+            corners=corners,
+            pressure=pressure,
+        )
+        if prob >= threshold and conviction >= min_confidence:
+            candidates.append(
+                DeterministicSignal(
+                    True,
+                    "goals",
+                    "over",
+                    0.5,
+                    prob,
+                    conviction,
+                    conviction,
+                    f"Jogo 0x0 com probabilidade {prob:.0%} de sair o primeiro gol ate {'o intervalo' if end_minute == 45 else 'o fim'}; conviccao {conviction} por chutes {total_shots:g}, no gol {shots_on:g}, escanteios {corners:g} e {pressure_label}.",
+                    strategy_name,
+                )
+            )
+
     for line, threshold, name in (
         (1.5, 0.75, "Over 1.5 FT"),
         (2.5, 0.72, "Over 2.5 FT"),
@@ -220,7 +315,7 @@ def evaluate_game(
                 )
             )
 
-    if 70 <= minute <= 86:
+    if 70 <= minute <= 86 and current_goals > 0:
         next_goal_line = current_goals + 0.5
         prob = _poisson_at_least(goal_mean, 1)
         score = round(prob * 100)
@@ -282,4 +377,4 @@ def evaluate_game(
             "no_signal",
         )
 
-    return sorted(candidates, key=lambda item: (item.score, item.probability), reverse=True)[0]
+    return sorted(candidates, key=lambda item: (_candidate_priority(item), item.score, item.probability), reverse=True)[0]
