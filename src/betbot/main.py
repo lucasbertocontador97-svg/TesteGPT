@@ -485,7 +485,8 @@ async def force_home_win_test_cmd(update: Update, context: ContextTypes.DEFAULT_
                 bookmaker_links=decision.bookmaker_links,
             )
             link_count = len(decision.bookmaker_links)
-            await update.message.reply_text(f"Teste enviado. Links diretos recebidos da Odds-API: {link_count}.")
+            suffix = "" if link_count else " A Odds-API retornou odds, mas sem deep-link liberado para este plano/evento."
+            await update.message.reply_text(f"Teste enviado. Links diretos recebidos da Odds-API: {link_count}.{suffix}")
             return
 
         await update.message.reply_text("Nao achei vitoria da casa com odd >= 1.80 nos jogos ao vivo retornados pela Odds-API.")

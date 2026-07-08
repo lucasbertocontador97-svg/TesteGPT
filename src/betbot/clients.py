@@ -47,30 +47,38 @@ class OddsApiClient:
         )
         return data if isinstance(data, list) else []
 
-    async def odds_multi(self, event_ids: list[str], bookmakers: list[str]) -> list[dict[str, Any]]:
+    async def odds_multi(self, event_ids: list[str], bookmakers: list[str], *, include_links: bool = True) -> list[dict[str, Any]]:
         if not event_ids:
             return []
-        data = await self.http.get_json(
-            f"{self.base_url}/odds/multi",
-            params={
-                "apiKey": self.api_key,
-                "eventIds": ",".join(event_ids[:10]),
-                "bookmakers": ",".join(bookmakers),
-                "includeLinks": "true",
-            },
-        )
+        params = {
+            "apiKey": self.api_key,
+            "eventIds": ",".join(event_ids[:10]),
+            "bookmakers": ",".join(bookmakers),
+        }
+        if include_links:
+            params["includeLinks"] = "true"
+        try:
+            data = await self.http.get_json(f"{self.base_url}/odds/multi", params=params)
+        except httpx.HTTPStatusError as exc:
+            if include_links and exc.response.status_code == 403:
+                return await self.odds_multi(event_ids, bookmakers, include_links=False)
+            raise
         return data if isinstance(data, list) else []
 
-    async def odds(self, event_id: str, bookmakers: list[str]) -> dict[str, Any] | None:
-        data = await self.http.get_json(
-            f"{self.base_url}/odds",
-            params={
-                "apiKey": self.api_key,
-                "eventId": event_id,
-                "bookmakers": ",".join(bookmakers),
-                "includeLinks": "true",
-            },
-        )
+    async def odds(self, event_id: str, bookmakers: list[str], *, include_links: bool = True) -> dict[str, Any] | None:
+        params = {
+            "apiKey": self.api_key,
+            "eventId": event_id,
+            "bookmakers": ",".join(bookmakers),
+        }
+        if include_links:
+            params["includeLinks"] = "true"
+        try:
+            data = await self.http.get_json(f"{self.base_url}/odds", params=params)
+        except httpx.HTTPStatusError as exc:
+            if include_links and exc.response.status_code == 403:
+                return await self.odds(event_id, bookmakers, include_links=False)
+            raise
         return data if isinstance(data, dict) else None
 
 
