@@ -20,6 +20,7 @@ MVP em Python para monitorar jogos ao vivo, buscar odds na Odds-API.io, buscar e
 - Tem comando `/official_no_odds` para enviar uma entrada oficial da IA sem consultar odds.
 - Tem comando `/envcheck` para conferir quais variaveis o deploy esta enxergando.
 - Tenta liquidar entradas de gols e escanteios quando houver dados finais suficientes.
+- Inclui documentacao oficial do EdgeBot AI em `docs/`.
 
 ## Instalar
 
