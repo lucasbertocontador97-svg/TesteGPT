@@ -64,16 +64,30 @@ def _bookmaker_link(links: dict[str, str], wanted: str) -> str | None:
     return None
 
 
-def bookmaker_keyboard(links: dict[str, str] | None = None) -> InlineKeyboardMarkup | None:
+def alert_keyboard(links: dict[str, str] | None = None, alert_id: int | None = None) -> InlineKeyboardMarkup | None:
     links = links or {}
     bet365_url = _bookmaker_link(links, "bet365")
     betano_url = _bookmaker_link(links, "betano")
+    rows = []
+    if alert_id is not None:
+        rows.append(
+            [
+                InlineKeyboardButton("\u2705 Apostei", callback_data=f"bet:{alert_id}"),
+                InlineKeyboardButton("\u274c Ignorei", callback_data=f"ignore:{alert_id}"),
+            ]
+        )
     buttons = []
     if bet365_url:
         buttons.append(InlineKeyboardButton("\U0001f3af Abrir Bet365", url=bet365_url))
     if betano_url:
         buttons.append(InlineKeyboardButton("\U0001f7e2 Abrir Betano", url=betano_url))
-    return InlineKeyboardMarkup([buttons]) if buttons else None
+    if buttons:
+        rows.append(buttons)
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+def bookmaker_keyboard(links: dict[str, str] | None = None) -> InlineKeyboardMarkup | None:
+    return alert_keyboard(links)
 
 
 async def send_message(
@@ -83,7 +97,8 @@ async def send_message(
     *,
     with_bookmakers: bool = False,
     bookmaker_links: dict[str, str] | None = None,
+    alert_id: int | None = None,
 ) -> None:
     bot = Bot(token)
-    reply_markup = bookmaker_keyboard(bookmaker_links) if with_bookmakers else None
+    reply_markup = alert_keyboard(bookmaker_links if with_bookmakers else None, alert_id)
     await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)

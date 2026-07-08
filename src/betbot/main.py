@@ -8,7 +8,7 @@ from datetime import date
 import httpx
 from telegram import Update
 from telegram.error import Conflict
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
@@ -20,7 +20,7 @@ from .models import Decision, GameSnapshot
 from .settlement import settle_alert
 from .stats import compact_player_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, compact_thestatsapi_statistics, compact_totalcorner_statistics, extract_minute, extract_score, has_actionable_stats, is_blocked_match_type, is_high_variance_match
 from .storage import Storage
-from .telegram_io import format_alert, send_message
+from .telegram_io import alert_keyboard, format_alert, send_message
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -293,9 +293,9 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 logger.info("Entrada repetida ignorada: %s", decision.alert_key)
                 continue
             if decision.odd > 0:
-                storage.save_alert(game, decision)
+                alert_id = storage.save_alert(game, decision)
             else:
-                storage.save_manual_alert(game, decision)
+                alert_id = storage.save_manual_alert(game, decision)
             message = format_alert(game, decision)
             if settings.dry_run or not send_alerts:
                 logger.info("DRY_RUN alerta:\n%s", message)
@@ -306,6 +306,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     message,
                     with_bookmakers=bool(decision.bookmaker_links),
                     bookmaker_links=decision.bookmaker_links,
+                    alert_id=alert_id,
                 )
             sent += 1
 
@@ -324,7 +325,13 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     try:
         perf = storage.performance()
         await update.message.reply_text(
-            f"Status: online\nAlertas: {perf['summary']}\nWin rate: {perf['win_rate']}%\nLucro unidades: {perf['profit_units']}"
+            f"Status: online\n"
+            f"Apostadas: {perf['actions'].get('BET', 0)}\n"
+            f"Pendentes: {perf['actions'].get('PENDING', 0)}\n"
+            f"Ignoradas: {perf['actions'].get('IGNORED', 0)}\n"
+            f"Resultados: {perf['summary']}\n"
+            f"Win rate: {perf['win_rate']}%\n"
+            f"Lucro unidades: {perf['profit_units']}"
         )
     finally:
         storage.close()
@@ -346,7 +353,7 @@ async def last_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         for alert in alerts:
             lines.append(
                 f"{alert['created_at']} | {alert['home']} x {alert['away']} | {alert['market']} {alert['selection']} "
-                f"{alert['line']} @ {alert['odd']} | {alert['status']}"
+                f"{alert['line']} @ {alert['odd']} | {alert.get('user_action', 'PENDING')} | {alert['status']}"
             )
         await update.message.reply_text("\n".join(lines))
     finally:
@@ -355,6 +362,29 @@ async def last_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def performance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await status_cmd(update, context)
+
+
+async def alert_action_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    action, _, raw_id = query.data.partition(":")
+    if action not in {"bet", "ignore"} or not raw_id.isdigit():
+        await query.answer("Acao invalida.")
+        return
+    settings = load_settings()
+    storage = Storage(settings.database_path)
+    try:
+        saved = storage.set_user_action(int(raw_id), "BET" if action == "bet" else "IGNORED")
+    finally:
+        storage.close()
+    if not saved:
+        await query.answer("Entrada nao encontrada.")
+        return
+    if action == "bet":
+        await query.answer("Registrado: voce apostou.")
+    else:
+        await query.answer("Registrado: entrada ignorada.")
 
 
 async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -720,7 +750,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 final_stake,
                 alert_key,
             )
-            storage.save_manual_alert(game, decision)
+            alert_id = storage.save_manual_alert(game, decision)
             minute = "?" if game.minute is None else f"{game.minute}'"
             score = f"{game.score_home if game.score_home is not None else '?'}x{game.score_away if game.score_away is not None else '?'}"
             line_label = "" if final_line is None else f" {final_line:g}"
@@ -741,7 +771,8 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"{' (' + ', '.join(caution_notes) + ')' if caution_notes else ''}\n\n"
                 f"Estatisticas usadas:\n{compact_stats_summary(game.stats)}\n\n"
                 f"Motivo matematico: {math_signal.reason}\n"
-                f"Leitura IA: {idea.reason}"
+                f"Leitura IA: {idea.reason}",
+                reply_markup=alert_keyboard(alert_id=alert_id),
             )
             return
 
@@ -847,7 +878,7 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
             "baixa",
             alert_key,
         )
-        storage.save_manual_alert(game, decision)
+        alert_id = storage.save_manual_alert(game, decision)
 
         minute = "?" if game.minute is None else f"{game.minute}'"
         score = f"{game.score_home if game.score_home is not None else '?'}x{game.score_away if game.score_away is not None else '?'}"
@@ -868,7 +899,8 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
             "Stake: baixa\n\n"
             f"Estatisticas usadas:\n{compact_stats_summary(game.stats)}\n\n"
             f"Motivo matematico: {signal.reason}\n\n"
-            f"Leitura IA:\n{ai_reading}"
+            f"Leitura IA:\n{ai_reading}",
+            reply_markup=alert_keyboard(alert_id=alert_id),
         )
     except httpx.HTTPStatusError as exc:
         logger.warning("Erro HTTP na entrada verificada: %s", exc.response.status_code)
@@ -1274,6 +1306,7 @@ def run_bot() -> None:
 
     app = Application.builder().token(settings.telegram_bot_token).concurrent_updates(True).build()
     app.add_error_handler(error_handler)
+    app.add_handler(CallbackQueryHandler(alert_action_cmd, pattern="^(bet|ignore):"))
     app.add_handler(CommandHandler("ping", ping_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("last", last_cmd))

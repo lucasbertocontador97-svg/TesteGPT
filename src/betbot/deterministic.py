@@ -196,6 +196,10 @@ def evaluate_game(
         (1.5, 0.75, "Over 1.5 FT"),
         (2.5, 0.72, "Over 2.5 FT"),
     ):
+        if line == 1.5 and minute < 55:
+            continue
+        if line == 1.5 and current_goals >= 1 and minute < 70:
+            continue
         needed_goals = _needed_over(current_goals, line)
         if needed_goals <= 0:
             continue
