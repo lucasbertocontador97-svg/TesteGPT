@@ -70,6 +70,7 @@ No Telegram, teste:
 /force_verified_entry
 /debug_live_filters
 /debug_sportmonks
+/debug_api_football_stats
 /envcheck
 ```
 

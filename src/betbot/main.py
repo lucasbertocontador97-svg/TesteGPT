@@ -735,6 +735,52 @@ async def debug_sportmonks_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         await http.close()
 
 
+async def debug_api_football_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Diagnosticando estatisticas da API-Football...")
+        api_football = ApiFootballClient(settings.api_football_key, http)
+        fixtures = await api_football.live_fixtures()
+        if not fixtures:
+            await update.message.reply_text("API-Football nao retornou jogos ao vivo.")
+            return
+
+        lines = [f"API-Football jogos ao vivo: {len(fixtures)}"]
+        for fixture in fixtures[:5]:
+            fixture_id = fixture.get("fixture", {}).get("id")
+            teams = fixture.get("teams", {})
+            home = teams.get("home", {}).get("name", "")
+            away = teams.get("away", {}).get("name", "")
+            minute = extract_minute(fixture)
+            score_home, score_away = extract_score(fixture)
+            if not fixture_id:
+                lines.append(f"- {home} x {away}: sem fixture_id")
+                continue
+            raw = await api_football.fixture_statistics(int(fixture_id))
+            compact = compact_statistics(raw)
+            stat_names = []
+            for team_stats in raw:
+                team_name = team_stats.get("team", {}).get("name", "?")
+                names = [str(stat.get("type")) for stat in team_stats.get("statistics", []) if stat.get("type")]
+                stat_names.append(f"{team_name}: {', '.join(names[:12]) if names else 'sem campos'}")
+            score = f"{score_home if score_home is not None else '?'}x{score_away if score_away is not None else '?'}"
+            lines.append(
+                f"- {home} x {away} {score} {minute or '?'}' fixture={fixture_id}: "
+                f"times_stats={len(raw)} acionavel={'sim' if has_actionable_stats(compact) else 'nao'}"
+            )
+            lines.extend([f"  {item}" for item in stat_names[:2]])
+        await update.message.reply_text("\n".join(lines)[:3900])
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Erro HTTP no diagnostico API-Football: %s", exc.response.status_code)
+        await update.message.reply_text(f"Erro HTTP API-Football: {exc.response.status_code}")
+    except Exception as exc:
+        logger.exception("Erro no diagnostico API-Football")
+        await update.message.reply_text(f"Erro no diagnostico API-Football: {type(exc).__name__}")
+    finally:
+        await http.close()
+
+
 async def scheduled_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     storage = Storage(settings.database_path)
@@ -775,6 +821,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("force_verified_entry", force_verified_entry_cmd))
     app.add_handler(CommandHandler("debug_live_filters", debug_live_filters_cmd))
     app.add_handler(CommandHandler("debug_sportmonks", debug_sportmonks_cmd))
+    app.add_handler(CommandHandler("debug_api_football_stats", debug_api_football_stats_cmd))
     app.add_handler(CommandHandler("envcheck", envcheck_cmd))
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=min(60, settings.poll_seconds))
     if settings.startup_alert and not settings.dry_run:
