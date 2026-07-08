@@ -296,3 +296,28 @@ def is_high_variance_match(league: str, home: str, away: str) -> bool:
     text = f"{league} {home} {away}".lower()
     markers = ("friendly", "friendlies", "amistoso", "u20", "u19", "u21", "u23", "reserves", "women")
     return any(marker in text for marker in markers)
+
+
+def is_blocked_match_type(league: str, home: str, away: str) -> bool:
+    text = f"{league} {home} {away}".lower()
+    blocked_markers = (
+        "(w)",
+        " women",
+        " feminino",
+        "feminino ",
+        " esoccer",
+        "e-soccer",
+        " esports",
+        " cyber",
+        " simulated",
+        " simulation",
+        "srl",
+        " ebasket",
+    )
+    if any(marker in text for marker in blocked_markers):
+        return True
+    if "(" in home and ")" in home:
+        return True
+    if "(" in away and ")" in away:
+        return True
+    return False

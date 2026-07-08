@@ -17,7 +17,7 @@ from .markets import flatten_all_markets, flatten_markets, market_matches_idea
 from .matching import find_matching_odds_event, find_matching_sportmonks_fixture, find_matching_thestatsapi_match, find_matching_totalcorner_match, sportmonks_participant_names
 from .models import Decision, GameSnapshot
 from .settlement import settle_alert
-from .stats import compact_player_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, compact_thestatsapi_statistics, compact_totalcorner_statistics, extract_minute, extract_score, has_actionable_stats, is_high_variance_match
+from .stats import compact_player_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, compact_thestatsapi_statistics, compact_totalcorner_statistics, extract_minute, extract_score, has_actionable_stats, is_blocked_match_type, is_high_variance_match
 from .storage import Storage
 from .telegram_io import format_alert, send_message
 
@@ -52,7 +52,12 @@ async def load_totalcorner_live(settings, http: HttpJsonClient) -> list[dict]:
     if not settings.totalcorner_token:
         return []
     try:
-        return await TotalCornerClient(settings.totalcorner_token, http).today_inplay(settings.max_live_events)
+        live = await TotalCornerClient(settings.totalcorner_token, http).today_inplay(settings.max_live_events)
+        return [
+            match
+            for match in live
+            if not is_blocked_match_type(str(match.get("l") or ""), str(match.get("h") or ""), str(match.get("a") or ""))
+        ]
     except httpx.HTTPStatusError as exc:
         logger.warning("TotalCorner live matches falhou com HTTP %s.", exc.response.status_code)
         return []
@@ -812,16 +817,31 @@ async def debug_totalcorner_cmd(update: Update, context: ContextTypes.DEFAULT_TY
 
         live = await client.today_inplay(settings.max_live_events)
         if live:
-            lines.append(f"\nTotalCorner jogos ao vivo parseados: {len(live)}")
-            for match in live[:10]:
+            accepted = [
+                match
+                for match in live
+                if not is_blocked_match_type(str(match.get("l") or ""), str(match.get("h") or ""), str(match.get("a") or ""))
+            ]
+            blocked_count = len(live) - len(accepted)
+            lines.append(f"\nTotalCorner jogos ao vivo parseados: {len(live)} | aceitos: {len(accepted)} | bloqueados: {blocked_count}")
+            for match in accepted[:10]:
                 stats = compact_totalcorner_statistics(match)
                 stat_count = sum(len(values) for values in stats.values())
                 summary = compact_stats_summary(stats).replace("\n", " | ") if stats else "sem stats parseadas"
                 score = f"{match.get('hg', '?')}x{match.get('ag', '?')}"
+                raw_keys = ",".join(sorted(str(key) for key in match.keys() if "danger" in str(key).lower()))
+                key_note = f" | dangerous_keys={raw_keys}" if raw_keys else ""
                 lines.append(
                     f"- {match.get('h', '?')} x {match.get('a', '?')} {score} {match.get('status', '?')}': "
-                    f"stats={stat_count} | {summary}"
+                    f"stats={stat_count} | {summary}{key_note}"
                 )
+            if blocked_count:
+                lines.append("\nBloqueados por tipo de jogo:")
+                for match in live:
+                    if is_blocked_match_type(str(match.get("l") or ""), str(match.get("h") or ""), str(match.get("a") or "")):
+                        lines.append(f"- {match.get('h', '?')} x {match.get('a', '?')} | {match.get('l', '-')}")
+                        if len(lines) >= 24:
+                            break
         await update.message.reply_text("\n".join(lines)[:3900])
     except httpx.HTTPStatusError as exc:
         logger.warning("Erro HTTP no diagnostico TotalCorner: %s", exc.response.status_code)
