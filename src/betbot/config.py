@@ -66,9 +66,9 @@ def require_runtime_settings(settings: Settings) -> None:
 
 def require_telegram_settings(settings: Settings) -> None:
     missing = []
-    if not settings.telegram_bot_token and not settings.dry_run:
+    if not settings.telegram_bot_token:
         missing.append("TELEGRAM_BOT_TOKEN")
-    if not settings.telegram_chat_id and not settings.dry_run:
+    if not settings.telegram_chat_id:
         missing.append("TELEGRAM_CHAT_ID")
     if missing:
         raise RuntimeError("Variaveis obrigatorias ausentes: " + ", ".join(missing))
