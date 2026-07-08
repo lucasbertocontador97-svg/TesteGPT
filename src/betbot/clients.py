@@ -53,8 +53,9 @@ class OddsApiClient:
         params = {
             "apiKey": self.api_key,
             "eventIds": ",".join(event_ids[:10]),
-            "bookmakers": ",".join(bookmakers),
         }
+        if bookmakers:
+            params["bookmakers"] = ",".join(bookmakers)
         if include_links:
             params["includeLinks"] = "true"
         try:
@@ -69,8 +70,9 @@ class OddsApiClient:
         params = {
             "apiKey": self.api_key,
             "eventId": event_id,
-            "bookmakers": ",".join(bookmakers),
         }
+        if bookmakers:
+            params["bookmakers"] = ",".join(bookmakers)
         if include_links:
             params["includeLinks"] = "true"
         try:

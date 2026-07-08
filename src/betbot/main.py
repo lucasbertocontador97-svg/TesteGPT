@@ -428,11 +428,25 @@ async def force_home_win_test_cmd(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text("Odds-API nao retornou jogos ao vivo agora.")
             return
 
+        forbidden_events = 0
+        checked_events = 0
         for event in live_events[: settings.odds_detail_limit]:
             event_id = str(event.get("id") or "")
             if not event_id:
                 continue
-            odds_payload = await odds_api.odds(event_id, settings.bookmakers)
+            checked_events += 1
+            try:
+                odds_payload = await odds_api.odds(event_id, settings.bookmakers)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 403:
+                    raise
+                forbidden_events += 1
+                try:
+                    odds_payload = await odds_api.odds(event_id, [], include_links=False)
+                except httpx.HTTPStatusError as fallback_exc:
+                    if fallback_exc.response.status_code != 403:
+                        raise
+                    continue
             markets = flatten_all_markets(odds_payload or {}, fixture_id=None, min_odd=settings.min_odd)
             home_markets = [
                 market
@@ -489,7 +503,10 @@ async def force_home_win_test_cmd(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text(f"Teste enviado. Links diretos recebidos da Odds-API: {link_count}.{suffix}")
             return
 
-        await update.message.reply_text("Nao achei vitoria da casa com odd >= 1.80 nos jogos ao vivo retornados pela Odds-API.")
+        await update.message.reply_text(
+            "Nao achei vitoria da casa com odd >= 1.80 nos jogos ao vivo retornados pela Odds-API. "
+            f"Eventos checados: {checked_events}. Bloqueios 403: {forbidden_events}."
+        )
     except httpx.HTTPStatusError as exc:
         logger.warning("Erro HTTP no teste de vitoria casa: %s", exc.response.status_code)
         await update.message.reply_text(f"Erro HTTP no teste de vitoria casa: {exc.response.status_code}")
