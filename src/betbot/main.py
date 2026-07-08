@@ -263,7 +263,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
             if settings.dry_run or not send_alerts:
                 logger.info("DRY_RUN alerta:\n%s", message)
             else:
-                await send_message(settings.telegram_bot_token, settings.telegram_chat_id, message)
+                await send_message(settings.telegram_bot_token, settings.telegram_chat_id, message, with_bookmakers=True)
             sent += 1
 
         for alert in storage.pending_alerts():
