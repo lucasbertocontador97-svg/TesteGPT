@@ -11,6 +11,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
+from .deterministic import evaluate_game
 from .markets import flatten_all_markets, flatten_markets, market_matches_idea
 from .matching import find_matching_odds_event
 from .models import Decision, GameSnapshot
@@ -92,6 +93,16 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 required_confidence = max(required_confidence, 85)
             if game.minute is not None and game.minute < 25:
                 required_confidence = max(required_confidence, 85)
+            math_signal = evaluate_game(
+                minute=game.minute,
+                score_home=game.score_home,
+                score_away=game.score_away,
+                stats=game.stats,
+                min_confidence=required_confidence,
+            )
+            if not math_signal.approved:
+                logger.info("Motor matematico bloqueou %s x %s: %s", game.home, game.away, math_signal.reason)
+                continue
             idea = await suggest_market_without_odds(
                 game,
                 api_key=settings.openai_api_key,
@@ -100,6 +111,9 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
             )
             if not idea.should_check_odds:
                 logger.info("IA nao pediu odds: %s x %s - %s", game.home, game.away, idea.reason)
+                continue
+            if idea.market_family != math_signal.market_family or idea.selection != math_signal.selection:
+                logger.info("IA divergiu do motor matematico em %s x %s.", game.home, game.away)
                 continue
             try:
                 odds_payload = await odds_api.odds(game.event_id, settings.bookmakers)
@@ -373,6 +387,16 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
             if game.minute is not None and game.minute < 25:
                 required_confidence = max(required_confidence, 85)
                 caution_notes.append("jogo muito cedo")
+            math_signal = evaluate_game(
+                minute=game.minute,
+                score_home=game.score_home,
+                score_away=game.score_away,
+                stats=game.stats,
+                min_confidence=required_confidence,
+            )
+            if not math_signal.approved:
+                logger.info("Motor matematico bloqueou entrada sem odds em %s x %s: %s", game.home, game.away, math_signal.reason)
+                continue
             idea = await suggest_market_without_odds(
                 game,
                 api_key=settings.openai_api_key,
@@ -382,6 +406,9 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
             if not idea.should_check_odds:
                 logger.info("Sem entrada sem odds: %s x %s - %s", game.home, game.away, idea.reason)
                 continue
+            if idea.market_family != math_signal.market_family or idea.selection != math_signal.selection:
+                logger.info("IA divergiu do motor matematico em %s x %s.", game.home, game.away)
+                continue
 
             market_label = {
                 ("goals", "over"): "Mais gols",
@@ -389,7 +416,8 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 ("corners", "over"): "Mais escanteios",
                 ("corners", "under"): "Menos escanteios",
             }.get((idea.market_family, idea.selection), f"{idea.market_family} {idea.selection}")
-            alert_key = f"no-odds|{game.fixture_id}|{idea.market_family}|{idea.selection}|{idea.line}|{game.minute or ''}"
+            final_line = math_signal.line if math_signal.line is not None else idea.line
+            alert_key = f"no-odds|{game.fixture_id}|{idea.market_family}|{idea.selection}|{final_line}|{game.minute or ''}"
             if storage.seen_alert(alert_key):
                 await update.message.reply_text("A IA encontrou uma entrada sem odds, mas ela ja foi enviada antes.")
                 return
@@ -401,15 +429,15 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 idea.selection,
                 "Conferir manualmente",
                 0.0,
-                idea.line,
-                idea.reason,
+                final_line,
+                f"{math_signal.reason} IA: {idea.reason}",
                 idea.stake,
                 alert_key,
             )
             storage.save_manual_alert(game, decision)
             minute = "?" if game.minute is None else f"{game.minute}'"
             score = f"{game.score_home if game.score_home is not None else '?'}x{game.score_away if game.score_away is not None else '?'}"
-            line_label = "" if idea.line is None else f" {idea.line:g}"
+            line_label = "" if final_line is None else f" {final_line:g}"
             await update.message.reply_text(
                 "ENTRADA OFICIAL - SEM ODD\n\n"
                 "A IA escolheu o mercado pela leitura do jogo ao vivo. Confira a odd manualmente antes de entrar.\n\n"
@@ -419,12 +447,15 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"Placar: {score}\n"
                 f"Mercado indicado: {market_label}{line_label}\n"
                 f"Direcao: {idea.selection}\n"
-                f"Confianca: {idea.confidence}%\n"
+                f"Confianca IA: {idea.confidence}%\n"
+                f"Probabilidade matematica: {math_signal.probability:.0%}\n"
+                f"Estrategia: {math_signal.strategy}\n"
                 f"Stake: {idea.stake}\n"
                 f"Filtro aplicado: confianca minima {required_confidence}%"
                 f"{' (' + ', '.join(caution_notes) + ')' if caution_notes else ''}\n\n"
                 f"Estatisticas usadas:\n{compact_stats_summary(game.stats)}\n\n"
-                f"Motivo: {idea.reason}"
+                f"Motivo matematico: {math_signal.reason}\n"
+                f"Leitura IA: {idea.reason}"
             )
             return
 
