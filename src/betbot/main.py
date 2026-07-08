@@ -804,6 +804,98 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
         await http.close()
 
 
+async def debug_odds_flow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Diagnosticando fluxo com odds...")
+        odds_api = OddsApiClient(settings.odds_api_key, http)
+        api_football = ApiFootballClient(settings.api_football_key, http)
+        fixtures = await api_football.live_fixtures()
+        odds_events = await odds_api.live_events(settings.sport, settings.max_live_events)
+        totalcorner_live = await load_totalcorner_live(settings, http)
+        sportmonks_live = await load_sportmonks_live(settings, http)
+        sportmonks_client = make_sportmonks_client(settings, http)
+        thestatsapi_live = await load_thestatsapi_live(settings, http)
+        thestatsapi_client = make_thestatsapi_client(settings, http)
+
+        lines = [
+            f"API-Football live: {len(fixtures)} | Odds-API live: {len(odds_events)} | TotalCorner aceitos: {len(totalcorner_live)}"
+        ]
+        checked_odds = 0
+        for fixture in fixtures[:10]:
+            teams = fixture.get("teams", {})
+            home = str(teams.get("home", {}).get("name") or "")
+            away = str(teams.get("away", {}).get("name") or "")
+            minute = extract_minute(fixture)
+            score_home, score_away = extract_score(fixture)
+            score = f"{score_home if score_home is not None else '?'}x{score_away if score_away is not None else '?'}"
+            event = find_matching_odds_event(fixture, odds_events)
+            if not event:
+                lines.append(f"- {home} x {away} {score} {minute or '?'}': sem match na Odds-API")
+                continue
+            event_id = str(event.get("id") or "")
+            stats = await fixture_stats_with_sportmonks_fallback(
+                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
+            )
+            if not has_actionable_stats(stats):
+                lines.append(f"- {home} x {away} {score} {minute or '?'}': odds match, sem stats acionaveis")
+                continue
+            league = str(fixture.get("league", {}).get("name", "") or "")
+            required_confidence = settings.min_confidence
+            if is_high_variance_match(league, home, away):
+                required_confidence = max(required_confidence, 85)
+            if minute is not None and minute < 25:
+                required_confidence = max(required_confidence, 85)
+            signal = evaluate_game(
+                minute=minute,
+                score_home=score_home,
+                score_away=score_away,
+                stats=stats,
+                min_confidence=required_confidence,
+            )
+            if not signal.approved:
+                lines.append(f"- {home} x {away} {score} {minute or '?'}': motor bloqueou: {signal.reason}")
+                continue
+            if not event_id:
+                lines.append(f"- {home} x {away} {score} {minute or '?'}': sinal aprovado, mas event_id ausente")
+                continue
+            if checked_odds >= settings.odds_detail_limit:
+                lines.append(f"- {home} x {away} {score} {minute or '?'}': sinal aprovado, mas limite de odds debug atingido")
+                continue
+            checked_odds += 1
+            odds_payload = await odds_api.odds(event_id, settings.bookmakers)
+            markets_all = flatten_all_markets(odds_payload or {}, fixture_id=fixture.get("fixture", {}).get("id"), min_odd=1.01)
+            markets_min = flatten_markets(odds_payload or {}, fixture_id=fixture.get("fixture", {}).get("id"), min_odd=settings.min_odd)
+            compatible = [market for market in markets_min if market_matches_idea(market, signal.market_family, signal.selection, signal.line)]
+            examples = []
+            for market in markets_all[:5]:
+                line = "" if market.line is None else f" {market.line:g}"
+                examples.append(f"{market.bookmaker}:{market.market_name}/{market.selection}{line}@{market.odd:.2f}")
+            if compatible:
+                best = sorted(compatible, key=lambda market: market.odd, reverse=True)[0]
+                lines.append(
+                    f"- {home} x {away} {score} {minute or '?'}': APROVADO {signal.strategy} linha {signal.line:g}; "
+                    f"odd compativel {best.bookmaker} {best.market_name}/{best.selection} {best.line or signal.line}@{best.odd:.2f}"
+                )
+            else:
+                lines.append(
+                    f"- {home} x {away} {score} {minute or '?'}': sinal {signal.market_family}/{signal.selection} {signal.line:g}, "
+                    f"mercados >= {settings.min_odd:.2f}: {len(markets_min)}, compativeis: 0"
+                )
+                if examples:
+                    lines.append("  exemplos odds: " + " | ".join(examples)[:900])
+        await update.message.reply_text("\n".join(lines)[:3900])
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Erro HTTP no diagnostico odds flow: %s", exc.response.status_code)
+        await update.message.reply_text(f"Erro HTTP odds flow: {exc.response.status_code}")
+    except Exception as exc:
+        logger.exception("Erro no diagnostico odds flow")
+        await update.message.reply_text(f"Erro no diagnostico odds flow: {type(exc).__name__}")
+    finally:
+        await http.close()
+
+
 async def debug_totalcorner_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     http = HttpJsonClient()
@@ -1042,6 +1134,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("official_no_odds", with_timeout(official_no_odds_cmd, 60, "/official_no_odds")))
     app.add_handler(CommandHandler("force_verified_entry", with_timeout(force_verified_entry_cmd, 60, "/force_verified_entry")))
     app.add_handler(CommandHandler("debug_live_filters", with_timeout(debug_live_filters_cmd, 45, "/debug_live_filters")))
+    app.add_handler(CommandHandler("debug_odds_flow", with_timeout(debug_odds_flow_cmd, 60, "/debug_odds_flow")))
     app.add_handler(CommandHandler("debug_sportmonks", debug_sportmonks_cmd))
     app.add_handler(CommandHandler("debug_api_football_stats", debug_api_football_stats_cmd))
     app.add_handler(CommandHandler("debug_thestatsapi", debug_thestatsapi_cmd))
