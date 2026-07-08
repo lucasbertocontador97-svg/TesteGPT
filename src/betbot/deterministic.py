@@ -119,7 +119,10 @@ def evaluate_game(
         (1.5, 0.75, "Over 1.5 FT"),
         (2.5, 0.72, "Over 2.5 FT"),
     ):
-        prob = _poisson_at_least(goal_mean, _needed_over(current_goals, line))
+        needed_goals = _needed_over(current_goals, line)
+        if needed_goals <= 0:
+            continue
+        prob = _poisson_at_least(goal_mean, needed_goals)
         score = round(prob * 100)
         if prob >= threshold and score >= min_confidence:
             candidates.append(
