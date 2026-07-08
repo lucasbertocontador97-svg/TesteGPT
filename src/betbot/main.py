@@ -7,7 +7,7 @@ from datetime import date
 
 import httpx
 from telegram import Update
-from telegram.error import Conflict
+from telegram.error import BadRequest, Conflict
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
@@ -428,6 +428,25 @@ async def performance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await status_cmd(update, context)
 
 
+async def _mark_alert_message(query, label: str) -> None:
+    if not query.message:
+        return
+    text = query.message.text or ""
+    status_line = f"Status: {label}"
+    if "Status: APOSTEI" in text or "Status: IGNORADA" in text:
+        new_text = text
+    else:
+        new_text = f"{text}\n\n{status_line}" if text else status_line
+    try:
+        await query.edit_message_text(text=new_text, reply_markup=None)
+    except BadRequest as exc:
+        logger.warning("Nao foi possivel editar alerta marcado: %s", exc)
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except BadRequest:
+            logger.exception("Nao foi possivel remover botoes do alerta.")
+
+
 async def alert_action_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.data:
@@ -447,12 +466,10 @@ async def alert_action_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if action == "bet":
         await query.answer("Registrado: voce apostou.")
-        if query.message:
-            await query.message.reply_text(f"Entrada #{raw_id} marcada como APOSTEI. Ela entrara no calculo de lucro.")
+        await _mark_alert_message(query, "APOSTEI")
     else:
         await query.answer("Registrado: entrada ignorada.")
-        if query.message:
-            await query.message.reply_text(f"Entrada #{raw_id} marcada como IGNOREI. Ela ficara fora do lucro.")
+        await _mark_alert_message(query, "IGNORADA")
 
 
 async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
