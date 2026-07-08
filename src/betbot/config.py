@@ -13,6 +13,7 @@ class Settings:
     telegram_chat_id: str
     odds_api_key: str
     api_football_key: str
+    sportmonks_api_token: str | None
     openai_api_key: str | None
     openai_model: str | None
     dry_run: bool
@@ -38,6 +39,7 @@ def load_settings() -> Settings:
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         odds_api_key=os.getenv("ODDS_API_KEY", ""),
         api_football_key=os.getenv("API_FOOTBALL_KEY", ""),
+        sportmonks_api_token=os.getenv("SPORTMONKS_API_TOKEN") or None,
         openai_api_key=os.getenv("OPENAI_API_KEY") or None,
         openai_model=os.getenv("OPENAI_MODEL") or None,
         dry_run=os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes", "sim"},
@@ -84,6 +86,7 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
         "TELEGRAM_CHAT_ID": bool(settings.telegram_chat_id),
         "ODDS_API_KEY": bool(settings.odds_api_key),
         "API_FOOTBALL_KEY": bool(settings.api_football_key),
+        "SPORTMONKS_API_TOKEN": bool(settings.sportmonks_api_token),
         "OPENAI_API_KEY": bool(settings.openai_api_key),
         "DRY_RUN_FALSE": not settings.dry_run,
         "ODDS_USE_MULTI": settings.odds_use_multi,

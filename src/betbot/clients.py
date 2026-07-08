@@ -91,3 +91,21 @@ class ApiFootballClient:
         data = await self.http.get_json(f"{self.base_url}/fixtures", params={"id": fixture_id}, headers=self.headers)
         response = data.get("response", []) if isinstance(data, dict) else []
         return response[0] if response else None
+
+
+class SportmonksClient:
+    base_url = "https://api.sportmonks.com/v3/football"
+
+    def __init__(self, api_token: str, http: HttpJsonClient) -> None:
+        self.api_token = api_token
+        self.http = http
+
+    async def live_scores(self) -> list[dict[str, Any]]:
+        data = await self.http.get_json(
+            f"{self.base_url}/livescores/inplay",
+            params={
+                "api_token": self.api_token,
+                "include": "participants;statistics.type;scores",
+            },
+        )
+        return data.get("data", []) if isinstance(data, dict) else []

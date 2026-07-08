@@ -47,3 +47,37 @@ def find_matching_odds_event(fixture: dict[str, Any], odds_events: list[dict[str
         if score > best[0]:
             best = (score, event)
     return best[1] if best[0] >= 0.72 else None
+
+
+def sportmonks_participant_names(fixture: dict[str, Any]) -> tuple[str, str]:
+    participants = fixture.get("participants", [])
+    home = ""
+    away = ""
+    for participant in participants if isinstance(participants, list) else []:
+        name = participant.get("name") or participant.get("display_name") or ""
+        meta = participant.get("meta", {}) if isinstance(participant.get("meta"), dict) else {}
+        location = str(meta.get("location") or "").lower()
+        if location == "home":
+            home = name
+        elif location == "away":
+            away = name
+    if not home and len(participants) > 0:
+        home = participants[0].get("name") or participants[0].get("display_name") or ""
+    if not away and len(participants) > 1:
+        away = participants[1].get("name") or participants[1].get("display_name") or ""
+    return home, away
+
+
+def find_matching_sportmonks_fixture(api_football_fixture: dict[str, Any], sportmonks_fixtures: list[dict[str, Any]]) -> dict[str, Any] | None:
+    teams = api_football_fixture.get("teams", {})
+    home = teams.get("home", {}).get("name", "")
+    away = teams.get("away", {}).get("name", "")
+    best: tuple[float, dict[str, Any] | None] = (0.0, None)
+    for fixture in sportmonks_fixtures:
+        sm_home, sm_away = sportmonks_participant_names(fixture)
+        direct = (similarity(home, sm_home) + similarity(away, sm_away)) / 2
+        swapped = (similarity(home, sm_away) + similarity(away, sm_home)) / 2
+        score = max(direct, swapped)
+        if score > best[0]:
+            best = (score, fixture)
+    return best[1] if best[0] >= 0.70 else None

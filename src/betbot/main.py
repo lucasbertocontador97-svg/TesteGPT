@@ -9,14 +9,14 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
-from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient
+from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
 from .markets import flatten_all_markets, flatten_markets, market_matches_idea
-from .matching import find_matching_odds_event
+from .matching import find_matching_odds_event, find_matching_sportmonks_fixture
 from .models import Decision, GameSnapshot
 from .settlement import settle_alert
-from .stats import compact_statistics, compact_stats_summary, extract_minute, extract_score, has_actionable_stats, is_high_variance_match
+from .stats import compact_sportmonks_statistics, compact_statistics, compact_stats_summary, extract_minute, extract_score, has_actionable_stats, is_high_variance_match
 from .storage import Storage
 from .telegram_io import format_alert, send_message
 
@@ -27,6 +27,28 @@ logging.getLogger("apscheduler").setLevel(logging.WARNING)
 logger = logging.getLogger("betbot")
 
 
+async def load_sportmonks_live(settings, http: HttpJsonClient) -> list[dict]:
+    if not settings.sportmonks_api_token:
+        return []
+    try:
+        return await SportmonksClient(settings.sportmonks_api_token, http).live_scores()
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Sportmonks live scores falhou com HTTP %s.", exc.response.status_code)
+        return []
+
+
+async def fixture_stats_with_sportmonks_fallback(
+    fixture: dict,
+    api_football: ApiFootballClient,
+    sportmonks_live: list[dict],
+) -> dict:
+    fixture_id = fixture.get("fixture", {}).get("id")
+    api_stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id))) if fixture_id else {}
+    sportmonks_fixture = find_matching_sportmonks_fixture(fixture, sportmonks_live) if sportmonks_live else None
+    sportmonks_stats = compact_sportmonks_statistics(sportmonks_fixture or {}) if sportmonks_fixture else {}
+    return sportmonks_stats if has_actionable_stats(sportmonks_stats) else api_stats
+
+
 async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFootballClient) -> list[GameSnapshot]:
     football_fixtures = await api_football.live_fixtures()
     if not football_fixtures:
@@ -34,6 +56,7 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
         return []
 
     odds_events = await odds_api.live_events(settings.sport, settings.max_live_events)
+    sportmonks_live = await load_sportmonks_live(settings, odds_api.http)
     matched_pairs: list[tuple[dict, dict]] = []
     used_event_ids: set[str] = set()
     for fixture in football_fixtures:
@@ -55,7 +78,7 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
     for fixture, event in matched_pairs:
         event_id = str(event.get("id") or "")
         fixture_id = fixture.get("fixture", {}).get("id") if fixture else None
-        stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id))) if fixture_id else {}
+        stats = await fixture_stats_with_sportmonks_fallback(fixture, api_football, sportmonks_live)
         score_home, score_away = extract_score(fixture)
         fixture_league = fixture.get("league", {}) if fixture else {}
         league = fixture_league.get("name") or (event.get("league", {}).get("name") if isinstance(event.get("league"), dict) else event.get("league", ""))
@@ -300,6 +323,7 @@ async def test_analysis_no_odds_cmd(update: Update, context: ContextTypes.DEFAUL
     try:
         await update.message.reply_text("Testando analise sem odds, usando apenas jogos ao vivo da API-Football...")
         api_football = ApiFootballClient(settings.api_football_key, http)
+        sportmonks_live = await load_sportmonks_live(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
             await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
@@ -307,7 +331,7 @@ async def test_analysis_no_odds_cmd(update: Update, context: ContextTypes.DEFAUL
 
         fixture = fixtures[0]
         fixture_id = fixture.get("fixture", {}).get("id")
-        stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id))) if fixture_id else {}
+        stats = await fixture_stats_with_sportmonks_fallback(fixture, api_football, sportmonks_live)
         score_home, score_away = extract_score(fixture)
         teams = fixture.get("teams", {})
         league = fixture.get("league", {}).get("name", "")
@@ -351,6 +375,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         await update.message.reply_text("Buscando entrada oficial sem consultar odds...")
         api_football = ApiFootballClient(settings.api_football_key, http)
+        sportmonks_live = await load_sportmonks_live(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
             await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
@@ -360,7 +385,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
             fixture_id = fixture.get("fixture", {}).get("id")
             if not fixture_id:
                 continue
-            stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id)))
+            stats = await fixture_stats_with_sportmonks_fallback(fixture, api_football, sportmonks_live)
             score_home, score_away = extract_score(fixture)
             teams = fixture.get("teams", {})
             league = fixture.get("league", {}).get("name", "")
@@ -480,6 +505,7 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
     try:
         await update.message.reply_text("Buscando entrada veridica em jogos ao vivo...")
         api_football = ApiFootballClient(settings.api_football_key, http)
+        sportmonks_live = await load_sportmonks_live(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
             await update.message.reply_text("Nao ha jogos ao vivo agora na API-Football.")
@@ -490,7 +516,7 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
             fixture_id = fixture.get("fixture", {}).get("id")
             if not fixture_id:
                 continue
-            stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id)))
+            stats = await fixture_stats_with_sportmonks_fallback(fixture, api_football, sportmonks_live)
             score_home, score_away = extract_score(fixture)
             teams = fixture.get("teams", {})
             league = fixture.get("league", {}).get("name", "")
@@ -594,6 +620,7 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
     try:
         await update.message.reply_text("Diagnosticando jogos ao vivo e filtros...")
         api_football = ApiFootballClient(settings.api_football_key, http)
+        sportmonks_live = await load_sportmonks_live(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
             await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
@@ -611,7 +638,7 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
             if not fixture_id:
                 lines.append(f"- {home} x {away}: sem fixture_id")
                 continue
-            stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id)))
+            stats = await fixture_stats_with_sportmonks_fallback(fixture, api_football, sportmonks_live)
             required_confidence = settings.min_confidence
             flags = []
             if is_high_variance_match(league, home, away):

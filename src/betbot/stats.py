@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .matching import sportmonks_participant_names
+
 
 def extract_score(fixture: dict[str, Any] | None) -> tuple[int | None, int | None]:
     if not fixture:
@@ -27,6 +29,76 @@ def compact_statistics(stats_response: list[dict[str, Any]]) -> dict[str, Any]:
             if key:
                 result[team][key] = value
     return result
+
+
+SPORTMONKS_TYPE_ID_MAP = {
+    34: "Corner Kicks",
+    41: "Shots off Goal",
+    42: "Total Shots",
+    43: "Attacks",
+    44: "Dangerous Attacks",
+    45: "Ball Possession",
+    86: "Shots on Goal",
+}
+
+
+def _sportmonks_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        for key in ("value", "total", "count", "percentage"):
+            if key in value:
+                return value[key]
+    return value
+
+
+def _sportmonks_stat_name(stat: dict[str, Any]) -> str | None:
+    type_data = stat.get("type") if isinstance(stat.get("type"), dict) else {}
+    raw_name = type_data.get("name") or type_data.get("code") or stat.get("name")
+    if raw_name:
+        lowered = str(raw_name).lower()
+        if "corner" in lowered:
+            return "Corner Kicks"
+        if "shot" in lowered and ("target" in lowered or "goal" in lowered):
+            return "Shots on Goal"
+        if "shot" in lowered and "off" in lowered:
+            return "Shots off Goal"
+        if "shot" in lowered:
+            return "Total Shots"
+        if "dangerous" in lowered and "attack" in lowered:
+            return "Dangerous Attacks"
+        if lowered.strip() == "attacks" or " attack" in lowered:
+            return "Attacks"
+        if "possession" in lowered:
+            return "Ball Possession"
+    type_id = stat.get("type_id")
+    try:
+        return SPORTMONKS_TYPE_ID_MAP.get(int(type_id))
+    except (TypeError, ValueError):
+        return None
+
+
+def compact_sportmonks_statistics(fixture: dict[str, Any]) -> dict[str, Any]:
+    home, away = sportmonks_participant_names(fixture)
+    participants = fixture.get("participants", [])
+    id_to_team = {}
+    for participant in participants if isinstance(participants, list) else []:
+        participant_id = participant.get("id")
+        name = participant.get("name") or participant.get("display_name") or ""
+        if participant_id and name:
+            id_to_team[participant_id] = name
+    result = {home: {}, away: {}} if home or away else {}
+    for stat in fixture.get("statistics", []) if isinstance(fixture.get("statistics"), list) else []:
+        name = _sportmonks_stat_name(stat)
+        if not name:
+            continue
+        participant_id = stat.get("participant_id") or stat.get("team_id")
+        team_name = id_to_team.get(participant_id)
+        if not team_name:
+            location = str(stat.get("location") or "").lower()
+            team_name = home if location == "home" else away if location == "away" else None
+        if not team_name:
+            continue
+        result.setdefault(team_name, {})[name] = _sportmonks_value(stat.get("value"))
+    return {team: values for team, values in result.items() if values}
 
 
 def total_stat(stats: dict[str, Any], names: tuple[str, ...]) -> int | None:

@@ -16,7 +16,6 @@ Este documento registra a logica aproveitada do LuquinhaBet para o EdgeBot AI.
 
 ## Ideias ainda nao implementadas
 
-- Sportmonks.
 - TheStatsAPI.
 - Cartoes.
 - Deep-links Bet365/Betano.
@@ -36,3 +35,5 @@ O arquivo `src/betbot/deterministic.py` contem o primeiro motor matematico:
 - retorna uma estrategia aprovada ou bloqueio.
 
 Este motor nao substitui a IA. Ele funciona como porteiro: se a matematica nao aprova, a IA nao gera entrada oficial.
+
+Sportmonks foi integrado como fonte preferencial/fallback de estatisticas ao vivo quando a API-Football nao entrega estatisticas acionaveis.
