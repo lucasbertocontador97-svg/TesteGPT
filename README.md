@@ -50,6 +50,12 @@ Quando estiver tudo certo, mude `DRY_RUN=false` no `.env` e rode:
 python -m src.betbot.main
 ```
 
+## Hospedar no Railway
+
+O projeto ja inclui `railway.json`. Para hospedar 24/7, use o guia:
+
+[RAILWAY_DEPLOY.md](RAILWAY_DEPLOY.md)
+
 ## Aviso importante
 
 Isto e uma ferramenta de analise e alerta, nao garantia de lucro. Use stake baixa no inicio, acompanhe o historico e ajuste os filtros antes de apostar dinheiro real.

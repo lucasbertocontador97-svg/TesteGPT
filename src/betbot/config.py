@@ -27,7 +27,9 @@ class Settings:
 
 def load_settings() -> Settings:
     load_dotenv()
-    db_path = Path(os.getenv("DATABASE_PATH", "bot.sqlite3"))
+    volume_path = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+    default_db_path = Path(volume_path) / "bot.sqlite3" if volume_path else Path("bot.sqlite3")
+    db_path = Path(os.getenv("DATABASE_PATH", str(default_db_path)))
     return Settings(
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
