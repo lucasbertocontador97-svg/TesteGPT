@@ -105,7 +105,7 @@ class SportmonksClient:
             f"{self.base_url}/livescores/inplay",
             params={
                 "api_token": self.api_token,
-                "include": "participants;statistics.type;scores",
+                "include": "participants,statistics.type,scores",
             },
         )
         return data.get("data", []) if isinstance(data, dict) else []

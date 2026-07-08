@@ -79,6 +79,8 @@ def _sportmonks_stat_name(stat: dict[str, Any]) -> str | None:
 def compact_sportmonks_statistics(fixture: dict[str, Any]) -> dict[str, Any]:
     home, away = sportmonks_participant_names(fixture)
     participants = fixture.get("participants", [])
+    if isinstance(participants, dict):
+        participants = participants.get("data", [])
     id_to_team = {}
     for participant in participants if isinstance(participants, list) else []:
         participant_id = participant.get("id")
@@ -86,7 +88,10 @@ def compact_sportmonks_statistics(fixture: dict[str, Any]) -> dict[str, Any]:
         if participant_id and name:
             id_to_team[participant_id] = name
     result = {home: {}, away: {}} if home or away else {}
-    for stat in fixture.get("statistics", []) if isinstance(fixture.get("statistics"), list) else []:
+    statistics = fixture.get("statistics", [])
+    if isinstance(statistics, dict):
+        statistics = statistics.get("data", [])
+    for stat in statistics if isinstance(statistics, list) else []:
         name = _sportmonks_stat_name(stat)
         if not name:
             continue

@@ -51,6 +51,8 @@ def find_matching_odds_event(fixture: dict[str, Any], odds_events: list[dict[str
 
 def sportmonks_participant_names(fixture: dict[str, Any]) -> tuple[str, str]:
     participants = fixture.get("participants", [])
+    if isinstance(participants, dict):
+        participants = participants.get("data", [])
     home = ""
     away = ""
     for participant in participants if isinstance(participants, list) else []:

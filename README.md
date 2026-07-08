@@ -20,6 +20,7 @@ MVP em Python para monitorar jogos ao vivo, buscar odds na Odds-API.io, buscar e
 - Tem comando `/official_no_odds` para enviar uma entrada oficial da IA sem consultar odds.
 - Tem comando `/force_verified_entry` para buscar a melhor entrada verificada sem odds.
 - Tem comando `/debug_live_filters` para ver por que jogos ao vivo foram bloqueados.
+- Tem comando `/debug_sportmonks` para ver se a Sportmonks esta retornando jogos e estatisticas.
 - Tem comando `/envcheck` para conferir quais variaveis o deploy esta enxergando.
 - Tenta liquidar entradas de gols e escanteios quando houver dados finais suficientes.
 - Inclui documentacao oficial do EdgeBot AI em `docs/`.

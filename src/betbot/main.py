@@ -13,7 +13,7 @@ from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, Sportmonk
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
 from .markets import flatten_all_markets, flatten_markets, market_matches_idea
-from .matching import find_matching_odds_event, find_matching_sportmonks_fixture
+from .matching import find_matching_odds_event, find_matching_sportmonks_fixture, sportmonks_participant_names
 from .models import Decision, GameSnapshot
 from .settlement import settle_alert
 from .stats import compact_sportmonks_statistics, compact_statistics, compact_stats_summary, extract_minute, extract_score, has_actionable_stats, is_high_variance_match
@@ -626,7 +626,7 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
             return
 
-        lines = [f"Jogos ao vivo analisados: {min(len(fixtures), 10)}"]
+        lines = [f"Jogos ao vivo analisados: {min(len(fixtures), 10)} | Sportmonks live: {len(sportmonks_live)}"]
         for fixture in fixtures[:10]:
             fixture_id = fixture.get("fixture", {}).get("id")
             teams = fixture.get("teams", {})
@@ -673,6 +673,31 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
         await http.close()
 
 
+async def debug_sportmonks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Diagnosticando Sportmonks...")
+        live = await load_sportmonks_live(settings, http)
+        if not live:
+            await update.message.reply_text("Sportmonks nao retornou jogos ao vivo ou o token/plano nao permitiu a chamada.")
+            return
+
+        lines = [f"Sportmonks jogos ao vivo: {len(live)}"]
+        for fixture in live[:10]:
+            home, away = sportmonks_participant_names(fixture)
+            stats = compact_sportmonks_statistics(fixture)
+            stat_count = sum(len(values) for values in stats.values())
+            sample = compact_stats_summary(stats).replace("\n", " | ") if stats else "sem stats parseadas"
+            lines.append(f"- {home or '?'} x {away or '?'}: stats={stat_count} | {sample}")
+        await update.message.reply_text("\n".join(lines)[:3900])
+    except Exception as exc:
+        logger.exception("Erro no diagnostico Sportmonks")
+        await update.message.reply_text(f"Erro no diagnostico Sportmonks: {type(exc).__name__}")
+    finally:
+        await http.close()
+
+
 async def scheduled_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     storage = Storage(settings.database_path)
@@ -712,6 +737,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("official_no_odds", official_no_odds_cmd))
     app.add_handler(CommandHandler("force_verified_entry", force_verified_entry_cmd))
     app.add_handler(CommandHandler("debug_live_filters", debug_live_filters_cmd))
+    app.add_handler(CommandHandler("debug_sportmonks", debug_sportmonks_cmd))
     app.add_handler(CommandHandler("envcheck", envcheck_cmd))
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=min(60, settings.poll_seconds))
     if settings.startup_alert and not settings.dry_run:

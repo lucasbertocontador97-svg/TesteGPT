@@ -69,6 +69,7 @@ No Telegram, teste:
 /official_no_odds
 /force_verified_entry
 /debug_live_filters
+/debug_sportmonks
 /envcheck
 ```
 
