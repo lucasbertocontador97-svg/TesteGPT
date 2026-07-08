@@ -33,6 +33,7 @@ class Settings:
     odds_use_multi: bool
     odds_detail_limit: int
     hybrid_no_odds: bool
+    game_cooldown_minutes: int
 
 
 def load_settings() -> Settings:
@@ -64,9 +65,10 @@ def load_settings() -> Settings:
         max_live_events=int(os.getenv("MAX_LIVE_EVENTS", "20")),
         database_path=db_path,
         startup_alert=os.getenv("STARTUP_ALERT", "true").lower() in {"1", "true", "yes", "sim"},
-        odds_use_multi=os.getenv("ODDS_USE_MULTI", "false").lower() in {"1", "true", "yes", "sim"},
+        odds_use_multi=os.getenv("ODDS_USE_MULTI", "true").lower() in {"1", "true", "yes", "sim"},
         odds_detail_limit=max(1, int(os.getenv("ODDS_DETAIL_LIMIT", "5"))),
         hybrid_no_odds=os.getenv("HYBRID_NO_ODDS", "true").lower() in {"1", "true", "yes", "sim"},
+        game_cooldown_minutes=max(0, int(os.getenv("GAME_COOLDOWN_MINUTES", "30"))),
     )
 
 
@@ -108,4 +110,5 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
         "DRY_RUN_FALSE": not settings.dry_run,
         "ODDS_USE_MULTI": settings.odds_use_multi,
         "HYBRID_NO_ODDS": settings.hybrid_no_odds,
+        "GAME_COOLDOWN_MINUTES": bool(settings.game_cooldown_minutes),
     }

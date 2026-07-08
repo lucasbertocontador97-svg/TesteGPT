@@ -84,6 +84,21 @@ async def load_totalcorner_live(settings, http: HttpJsonClient) -> list[dict]:
         return []
 
 
+async def load_totalcorner_today(settings, http: HttpJsonClient) -> list[dict]:
+    if not settings.totalcorner_token:
+        return []
+    try:
+        matches = await TotalCornerClient(settings.totalcorner_token, http).today_all(max(settings.max_live_events, 100))
+        return [
+            match
+            for match in matches
+            if not is_blocked_match_type(str(match.get("l") or ""), str(match.get("h") or ""), str(match.get("a") or ""))
+        ]
+    except httpx.HTTPStatusError as exc:
+        logger.warning("TotalCorner today matches falhou com HTTP %s.", exc.response.status_code)
+        return []
+
+
 def make_sportmonks_client(settings, http: HttpJsonClient) -> SportmonksClient | None:
     if not settings.sportmonks_api_token:
         return None
@@ -207,7 +222,21 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
         odds_api = OddsApiClient(settings.odds_api_key, http)
         api_football = ApiFootballClient(settings.api_football_key, http)
         sent = 0
-        for game in await build_snapshots(settings, odds_api, api_football):
+        snapshots = await build_snapshots(settings, odds_api, api_football)
+        odds_payloads: dict[str, dict] = {}
+        if settings.odds_use_multi:
+            event_ids = [game.event_id for game in snapshots if game.event_id]
+            for index in range(0, len(event_ids), 10):
+                chunk = event_ids[index : index + 10]
+                try:
+                    for payload in await odds_api.odds_multi(chunk, settings.bookmakers):
+                        event_id = str(payload.get("id") or payload.get("eventId") or "")
+                        if event_id:
+                            odds_payloads[event_id] = payload
+                except httpx.HTTPStatusError as exc:
+                    logger.warning("Odds multi falhou com HTTP %s; usando fallback individual.", exc.response.status_code)
+
+        for game in snapshots:
             if not has_actionable_stats(game.stats):
                 logger.info("Sem estatisticas suficientes para %s x %s.", game.home, game.away)
                 continue
@@ -251,10 +280,12 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 )
             odds_payload = None
             if game.event_id:
-                try:
-                    odds_payload = await odds_api.odds(game.event_id, settings.bookmakers)
-                except httpx.HTTPStatusError as exc:
-                    logger.warning("Odds apos sinal matematico falhou para %s com HTTP %s.", game.event_id, exc.response.status_code)
+                odds_payload = odds_payloads.get(game.event_id)
+                if odds_payload is None:
+                    try:
+                        odds_payload = await odds_api.odds(game.event_id, settings.bookmakers)
+                    except httpx.HTTPStatusError as exc:
+                        logger.warning("Odds apos sinal matematico falhou para %s com HTTP %s.", game.event_id, exc.response.status_code)
             markets = flatten_markets(odds_payload or {}, fixture_id=game.fixture_id, min_odd=settings.min_odd)
             compatible = [market for market in markets if market_matches_idea(market, target_family, target_selection, target_line)]
             if not compatible:
@@ -296,6 +327,14 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
             if storage.seen_alert(decision.alert_key):
                 logger.info("Entrada repetida ignorada: %s", decision.alert_key)
                 continue
+            if storage.seen_recent_game_alert(game, settings.game_cooldown_minutes):
+                logger.info(
+                    "Entrada ignorada por cooldown de %s min no jogo %s x %s.",
+                    settings.game_cooldown_minutes,
+                    game.home,
+                    game.away,
+                )
+                continue
             if storage.seen_similar_alert(game, decision):
                 logger.info(
                     "Entrada similar repetida ignorada: %s x %s | %s %s %s",
@@ -327,8 +366,12 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 )
             sent += 1
 
-        for alert in storage.pending_alerts():
-            result = await settle_alert(alert, api_football)
+        pending_alerts = storage.pending_alerts()
+        totalcorner_today = []
+        if any("corner" in str(alert.get("market", "")).lower() or "escanteio" in str(alert.get("market", "")).lower() for alert in pending_alerts):
+            totalcorner_today = await load_totalcorner_today(settings, http)
+        for alert in pending_alerts:
+            result = await settle_alert(alert, api_football, totalcorner_today)
             if result:
                 storage.settle_alert(int(alert["id"]), result[0], result[1])
         return sent
@@ -400,8 +443,12 @@ async def alert_action_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if action == "bet":
         await query.answer("Registrado: voce apostou.")
+        if query.message:
+            await query.message.reply_text(f"Entrada #{raw_id} marcada como APOSTEI. Ela entrara no calculo de lucro.")
     else:
         await query.answer("Registrado: entrada ignorada.")
+        if query.message:
+            await query.message.reply_text(f"Entrada #{raw_id} marcada como IGNOREI. Ela ficara fora do lucro.")
 
 
 async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

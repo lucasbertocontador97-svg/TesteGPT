@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from .clients import ApiFootballClient
-from .stats import compact_statistics, total_stat
+from .matching import find_matching_totalcorner_match
+from .stats import compact_statistics, compact_totalcorner_statistics, total_stat
 
 
 def _settle_total(total: int, selection: str, line: float | None) -> tuple[str, str] | None:
@@ -24,7 +25,11 @@ def _settle_total(total: int, selection: str, line: float | None) -> tuple[str, 
     return None
 
 
-async def settle_alert(alert: dict[str, Any], api_football: ApiFootballClient) -> tuple[str, str] | None:
+async def settle_alert(
+    alert: dict[str, Any],
+    api_football: ApiFootballClient,
+    totalcorner_matches: list[dict[str, Any]] | None = None,
+) -> tuple[str, str] | None:
     fixture_id = alert.get("fixture_id")
     if not fixture_id:
         return None
@@ -40,6 +45,12 @@ async def settle_alert(alert: dict[str, Any], api_football: ApiFootballClient) -
     selection = str(alert.get("selection", "")).lower()
 
     if "corner" in market or "escanteio" in market:
+        if totalcorner_matches:
+            totalcorner_match = find_matching_totalcorner_match(fixture, totalcorner_matches)
+            totalcorner_stats = compact_totalcorner_statistics(totalcorner_match or {}) if totalcorner_match else {}
+            totalcorner_corners = total_stat(totalcorner_stats, ("Corner Kicks", "Corners"))
+            if totalcorner_corners is not None:
+                return _settle_total(totalcorner_corners, selection, line)
         stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id)))
         corners = total_stat(stats, ("Corner Kicks", "Corners"))
         if corners is None:

@@ -264,6 +264,14 @@ class TotalCornerClient:
         items = data.get("data", []) if isinstance(data, dict) else []
         return items[:limit] if isinstance(items, list) else []
 
+    async def today_all(self, limit: int = 200) -> list[dict[str, Any]]:
+        data = await self.http.get_json(
+            f"{self.base_url}/match/today",
+            params={"token": self.token, "columns": self.live_columns},
+        )
+        items = data.get("data", []) if isinstance(data, dict) else []
+        return items[:limit] if isinstance(items, list) else []
+
     async def diagnostic(self) -> list[dict[str, Any]]:
         checks = [
             ("match/today inplay", f"{self.base_url}/match/today", {"token": self.token, "type": "inplay"}),

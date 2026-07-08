@@ -99,6 +99,22 @@ class Storage:
                 return True
         return False
 
+    def seen_recent_game_alert(self, game: GameSnapshot, cooldown_minutes: int) -> bool:
+        if cooldown_minutes <= 0 or game.fixture_id is None:
+            return False
+        row = self.conn.execute(
+            """
+            select 1
+            from alerts
+            where fixture_id = ?
+              and status in ('SENT', 'WON', 'LOST', 'PUSH')
+              and created_at >= datetime('now', ?)
+            limit 1
+            """,
+            (game.fixture_id, f"-{cooldown_minutes} minutes"),
+        ).fetchone()
+        return row is not None
+
     def _alert_id(self, alert_key: str | None) -> int | None:
         if not alert_key:
             return None
