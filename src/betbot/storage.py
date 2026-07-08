@@ -110,7 +110,7 @@ class Storage:
         return [dict(row) for row in rows]
 
     def pending_alerts(self) -> list[dict[str, Any]]:
-        rows = self.conn.execute("select * from alerts where status = 'SENT' and fixture_id is not null").fetchall()
+        rows = self.conn.execute("select * from alerts where status = 'SENT' and fixture_id is not null and odd > 0").fetchall()
         return [dict(row) for row in rows]
 
     def settle_alert(self, alert_id: int, status: str, note: str) -> None:

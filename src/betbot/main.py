@@ -29,6 +29,22 @@ logging.getLogger("apscheduler").setLevel(logging.WARNING)
 logger = logging.getLogger("betbot")
 
 
+MARKET_LABELS = {
+    ("goals", "over"): "Mais gols",
+    ("goals", "under"): "Menos gols",
+    ("corners", "over"): "Mais escanteios",
+    ("corners", "under"): "Menos escanteios",
+}
+
+
+def market_label(market_family: str, selection: str) -> str:
+    return MARKET_LABELS.get((market_family, selection), f"{market_family} {selection}")
+
+
+def verified_alert_key(game: GameSnapshot, market_family: str, selection: str, line: float | None) -> str:
+    return f"verified|{game.fixture_id}|{market_family}|{selection}|{line}|{game.minute or ''}"
+
+
 async def load_sportmonks_live(settings, http: HttpJsonClient) -> list[dict]:
     if not settings.sportmonks_api_token:
         return []
@@ -138,41 +154,38 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
     thestatsapi_live = await load_thestatsapi_live(settings, odds_api.http)
     thestatsapi_client = make_thestatsapi_client(settings, odds_api.http)
     totalcorner_live = await load_totalcorner_live(settings, odds_api.http)
-    matched_pairs: list[tuple[dict, dict]] = []
+    fixture_event_pairs: list[tuple[dict, dict | None]] = []
     used_event_ids: set[str] = set()
-    for fixture in football_fixtures:
+    for fixture in football_fixtures[: max(settings.odds_detail_limit, 10)]:
         event = find_matching_odds_event(fixture, odds_events)
         event_id = str(event.get("id") or "") if event else ""
-        if not event or not event_id or event_id in used_event_ids:
-            continue
-        used_event_ids.add(event_id)
-        matched_pairs.append((fixture, event))
-        if len(matched_pairs) >= settings.odds_detail_limit:
-            break
-
-    if not matched_pairs:
-        logger.info("Jogos ao vivo da API-Football sem correspondencia na Odds-API.")
-        return []
+        if event_id:
+            if event_id in used_event_ids:
+                continue
+            used_event_ids.add(event_id)
+        fixture_event_pairs.append((fixture, event))
 
     snapshots: list[GameSnapshot] = []
 
-    for fixture, event in matched_pairs:
-        event_id = str(event.get("id") or "")
+    for fixture, event in fixture_event_pairs:
+        event_id = str(event.get("id") or "") if event else ""
         fixture_id = fixture.get("fixture", {}).get("id") if fixture else None
         stats = await fixture_stats_with_sportmonks_fallback(
             fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
         )
         score_home, score_away = extract_score(fixture)
         fixture_league = fixture.get("league", {}) if fixture else {}
-        league = fixture_league.get("name") or (event.get("league", {}).get("name") if isinstance(event.get("league"), dict) else event.get("league", ""))
+        league = fixture_league.get("name") or (
+            event.get("league", {}).get("name") if event and isinstance(event.get("league"), dict) else event.get("league", "") if event else ""
+        )
         teams = fixture.get("teams", {}) if fixture else {}
         snapshots.append(
             GameSnapshot(
                 event_id=event_id,
                 fixture_id=fixture_id,
                 league=str(league or ""),
-                home=str(teams.get("home", {}).get("name") or event.get("home") or ""),
-                away=str(teams.get("away", {}).get("name") or event.get("away") or ""),
+                home=str(teams.get("home", {}).get("name") or (event.get("home") if event else "") or ""),
+                away=str(teams.get("away", {}).get("name") or (event.get("away") if event else "") or ""),
                 minute=extract_minute(fixture),
                 score_home=score_home,
                 score_away=score_away,
@@ -232,38 +245,57 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     game.away,
                     idea.reason,
                 )
-            try:
-                odds_payload = await odds_api.odds(game.event_id, settings.bookmakers)
-            except httpx.HTTPStatusError as exc:
-                logger.warning("Odds apos sinal matematico falhou para %s com HTTP %s.", game.event_id, exc.response.status_code)
-                continue
+            odds_payload = None
+            if game.event_id:
+                try:
+                    odds_payload = await odds_api.odds(game.event_id, settings.bookmakers)
+                except httpx.HTTPStatusError as exc:
+                    logger.warning("Odds apos sinal matematico falhou para %s com HTTP %s.", game.event_id, exc.response.status_code)
             markets = flatten_markets(odds_payload or {}, fixture_id=game.fixture_id, min_odd=settings.min_odd)
             compatible = [market for market in markets if market_matches_idea(market, target_family, target_selection, target_line)]
             if not compatible:
                 logger.info("Sem odd >= %.2f para sinal %s/%s em %s x %s", settings.min_odd, target_family, target_selection, game.home, game.away)
-                continue
-            chosen = sorted(compatible, key=lambda market: market.odd, reverse=True)[0]
-            bookmaker_links = {}
-            for market in sorted(compatible, key=lambda item: item.odd, reverse=True):
-                if market.link_url and market.bookmaker not in bookmaker_links:
-                    bookmaker_links[market.bookmaker] = market.link_url
-            decision = Decision(
-                True,
-                target_confidence,
-                chosen.market_name,
-                chosen.selection,
-                chosen.bookmaker,
-                chosen.odd,
-                chosen.line or target_line,
-                target_reason,
-                target_stake,
-                chosen.alert_key,
-                bookmaker_links,
-            )
+                if not settings.hybrid_no_odds:
+                    continue
+                alert_key = verified_alert_key(game, target_family, target_selection, target_line)
+                decision = Decision(
+                    True,
+                    target_confidence,
+                    market_label(target_family, target_selection),
+                    target_selection,
+                    "Conferir manualmente",
+                    0.0,
+                    target_line,
+                    target_reason,
+                    target_stake,
+                    alert_key,
+                )
+            else:
+                chosen = sorted(compatible, key=lambda market: market.odd, reverse=True)[0]
+                bookmaker_links = {}
+                for market in sorted(compatible, key=lambda item: item.odd, reverse=True):
+                    if market.link_url and market.bookmaker not in bookmaker_links:
+                        bookmaker_links[market.bookmaker] = market.link_url
+                decision = Decision(
+                    True,
+                    target_confidence,
+                    chosen.market_name,
+                    chosen.selection,
+                    chosen.bookmaker,
+                    chosen.odd,
+                    chosen.line or target_line,
+                    target_reason,
+                    target_stake,
+                    chosen.alert_key,
+                    bookmaker_links,
+                )
             if storage.seen_alert(decision.alert_key):
                 logger.info("Entrada repetida ignorada: %s", decision.alert_key)
                 continue
-            storage.save_alert(game, decision)
+            if decision.odd > 0:
+                storage.save_alert(game, decision)
+            else:
+                storage.save_manual_alert(game, decision)
             message = format_alert(game, decision)
             if settings.dry_run or not send_alerts:
                 logger.info("DRY_RUN alerta:\n%s", message)
@@ -272,7 +304,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     settings.telegram_bot_token,
                     settings.telegram_chat_id,
                     message,
-                    with_bookmakers=True,
+                    with_bookmakers=bool(decision.bookmaker_links),
                     bookmaker_links=decision.bookmaker_links,
                 )
             sent += 1

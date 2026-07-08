@@ -32,6 +32,7 @@ class Settings:
     startup_alert: bool
     odds_use_multi: bool
     odds_detail_limit: int
+    hybrid_no_odds: bool
 
 
 def load_settings() -> Settings:
@@ -65,6 +66,7 @@ def load_settings() -> Settings:
         startup_alert=os.getenv("STARTUP_ALERT", "true").lower() in {"1", "true", "yes", "sim"},
         odds_use_multi=os.getenv("ODDS_USE_MULTI", "false").lower() in {"1", "true", "yes", "sim"},
         odds_detail_limit=max(1, int(os.getenv("ODDS_DETAIL_LIMIT", "5"))),
+        hybrid_no_odds=os.getenv("HYBRID_NO_ODDS", "true").lower() in {"1", "true", "yes", "sim"},
     )
 
 
@@ -105,4 +107,5 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
         "OPENAI_API_KEY": bool(settings.openai_api_key),
         "DRY_RUN_FALSE": not settings.dry_run,
         "ODDS_USE_MULTI": settings.odds_use_multi,
+        "HYBRID_NO_ODDS": settings.hybrid_no_odds,
     }

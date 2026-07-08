@@ -24,6 +24,8 @@ def format_alert(game: GameSnapshot, decision: Decision) -> str:
     minute = "?" if game.minute is None else f"{game.minute}'"
     market = f"{decision.market}{_line_label(decision.line)}"
     selection = _selection_label(decision.selection)
+    odd_text = f"{decision.odd:.2f}" if decision.odd > 0 else "sem cotacao live"
+    bookmaker_text = decision.bookmaker if decision.odd > 0 else "conferir manualmente"
     return (
         f"\U0001f534 AO VIVO {minute} {score}\n"
         "\u2705 ENTRADA APROVADA\n\n"
@@ -31,8 +33,8 @@ def format_alert(game: GameSnapshot, decision: Decision) -> str:
         f"\U0001f3c6 {game.league or '-'}\n\n"
         f"\U0001f4ca Mercado: {market}\n"
         f"\U0001f3af Direcao: {selection}\n"
-        f"\U0001f3e6 Odd real: {decision.odd:.2f}\n"
-        f"\U0001f3e0 Casa encontrada: {decision.bookmaker}\n"
+        f"\U0001f3e6 Odd real: {odd_text}\n"
+        f"\U0001f3e0 Casa encontrada: {bookmaker_text}\n"
         f"\U0001f4c8 Score: {decision.confidence}/100\n"
         f"\U0001f4b0 Stake: {decision.stake}\n\n"
         f"\U0001f9e0 Motivo: {decision.reason}"
