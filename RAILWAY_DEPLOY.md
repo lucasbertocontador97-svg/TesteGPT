@@ -21,7 +21,7 @@ ODDS_API_KEY=
 API_FOOTBALL_KEY=
 OPENAI_API_KEY=
 DRY_RUN=false
-POLL_SECONDS=45
+POLL_SECONDS=180
 MIN_ODD=1.80
 MIN_CONFIDENCE=70
 BOOKMAKERS=Bet365,Betano
@@ -71,3 +71,4 @@ No Telegram, teste:
 - Nao precisa gerar dominio publico.
 - Nao use Cron Job do Railway para este bot; ele ja tem loop interno.
 - Comece com `DRY_RUN=true` se quiser testar os logs antes de enviar alertas reais.
+- Se a Odds-API retornar `429 Too Many Requests`, aumente `POLL_SECONDS` para `300` ou mais.

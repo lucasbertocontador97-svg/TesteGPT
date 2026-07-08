@@ -40,7 +40,7 @@ def load_settings() -> Settings:
         openai_api_key=os.getenv("OPENAI_API_KEY") or None,
         openai_model=os.getenv("OPENAI_MODEL") or None,
         dry_run=os.getenv("DRY_RUN", "true").lower() in {"1", "true", "yes", "sim"},
-        poll_seconds=int(os.getenv("POLL_SECONDS", "45")),
+        poll_seconds=max(60, int(os.getenv("POLL_SECONDS", "180"))),
         min_odd=float(os.getenv("MIN_ODD", "1.80")),
         min_confidence=int(os.getenv("MIN_CONFIDENCE", "70")),
         bookmakers=[b.strip() for b in os.getenv("BOOKMAKERS", "Bet365,Betano").split(",") if b.strip()],

@@ -158,9 +158,15 @@ async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Forcando varredura agora...")
         sent = await process_once(settings, storage)
         await update.message.reply_text(f"Varredura concluida. Alertas enviados: {sent}")
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Erro HTTP ao forcar varredura: %s", exc.response.status_code)
+        if exc.response.status_code == 429:
+            await update.message.reply_text("Odds-API retornou 429 Too Many Requests. Aguarde alguns minutos ou aumente POLL_SECONDS.")
+        else:
+            await update.message.reply_text(f"Erro HTTP ao forcar varredura: {exc.response.status_code}")
     except Exception as exc:
         logger.exception("Erro ao forcar varredura")
-        await update.message.reply_text(f"Erro ao forcar varredura: {exc}")
+        await update.message.reply_text(f"Erro ao forcar varredura: {type(exc).__name__}")
     finally:
         storage.close()
 
@@ -172,7 +178,15 @@ async def force_live_alert_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("Buscando jogo ao vivo para alerta de teste...")
         odds_api = OddsApiClient(settings.odds_api_key, http)
         api_football = ApiFootballClient(settings.api_football_key, http)
-        live_events = await odds_api.live_events(settings.sport, settings.max_live_events)
+        try:
+            live_events = await odds_api.live_events(settings.sport, settings.max_live_events)
+        except httpx.HTTPStatusError as exc:
+            logger.warning("Live events falhou com HTTP %s.", exc.response.status_code)
+            if exc.response.status_code == 429:
+                await update.message.reply_text("Odds-API retornou 429 Too Many Requests. Aguarde alguns minutos e tente de novo.")
+            else:
+                await update.message.reply_text(f"Odds-API retornou HTTP {exc.response.status_code} ao buscar jogos ao vivo.")
+            return
         if not live_events:
             await update.message.reply_text("Nao encontrei jogos ao vivo agora na Odds-API.")
             return
@@ -217,7 +231,7 @@ async def force_live_alert_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("Encontrei jogos ao vivo, mas nenhum retornou mercado de odds utilizavel agora.")
     except Exception as exc:
         logger.exception("Erro ao forcar alerta ao vivo")
-        await update.message.reply_text(f"Erro ao forcar alerta ao vivo: {exc}")
+        await update.message.reply_text(f"Erro ao forcar alerta ao vivo: {type(exc).__name__}")
     finally:
         await http.close()
 
@@ -236,6 +250,8 @@ async def scheduled_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     storage = Storage(settings.database_path)
     try:
         await process_once(settings, storage)
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Erro HTTP no ciclo de monitoramento: %s", exc.response.status_code)
     except Exception:
         logger.exception("Erro no ciclo de monitoramento")
     finally:
