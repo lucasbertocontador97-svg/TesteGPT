@@ -89,3 +89,49 @@ def flatten_markets(
                         )
                     )
     return options
+
+
+def flatten_all_markets(
+    odds_payload: dict[str, Any],
+    *,
+    fixture_id: int | None,
+    min_odd: float = 1.01,
+) -> list[MarketOption]:
+    event_id = str(odds_payload.get("id") or odds_payload.get("eventId") or "")
+    options: list[MarketOption] = []
+    bookmakers = odds_payload.get("bookmakers", {})
+    if not isinstance(bookmakers, dict):
+        return options
+
+    for bookmaker, markets in bookmakers.items():
+        if not isinstance(markets, list):
+            continue
+        for market in markets:
+            market_name = str(market.get("name") or market.get("key") or "")
+            updated_at = market.get("updatedAt")
+            odds_rows = market.get("odds") if isinstance(market.get("odds"), list) else [market.get("odds")]
+            for row in odds_rows:
+                if not isinstance(row, dict):
+                    continue
+                line = _extract_line(row)
+                for key, value in row.items():
+                    selection = _clean_selection(str(key))
+                    if selection not in ALLOWED_SELECTIONS:
+                        continue
+                    odd = _to_float(value)
+                    if odd is None or odd < min_odd:
+                        continue
+                    options.append(
+                        MarketOption(
+                            event_id=event_id,
+                            fixture_id=fixture_id,
+                            bookmaker=str(bookmaker),
+                            market_name=market_name,
+                            selection=selection,
+                            odd=odd,
+                            line=line,
+                            updated_at=updated_at,
+                            raw=row,
+                        )
+                    )
+    return options

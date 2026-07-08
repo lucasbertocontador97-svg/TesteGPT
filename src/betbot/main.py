@@ -11,7 +11,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from .ai import analyze_game
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
-from .markets import flatten_markets
+from .markets import flatten_all_markets, flatten_markets
 from .matching import find_matching_fixture
 from .models import GameSnapshot
 from .settlement import settle_alert
@@ -165,6 +165,63 @@ async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         storage.close()
 
 
+async def force_live_alert_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Buscando jogo ao vivo para alerta de teste...")
+        odds_api = OddsApiClient(settings.odds_api_key, http)
+        api_football = ApiFootballClient(settings.api_football_key, http)
+        live_events = await odds_api.live_events(settings.sport, settings.max_live_events)
+        if not live_events:
+            await update.message.reply_text("Nao encontrei jogos ao vivo agora na Odds-API.")
+            return
+
+        fixtures = await api_football.live_fixtures()
+        for event in live_events:
+            event_id = str(event.get("id") or "")
+            if not event_id:
+                continue
+            fixture = find_matching_fixture(event, fixtures)
+            fixture_id = fixture.get("fixture", {}).get("id") if fixture else None
+            try:
+                odds_payload = await odds_api.odds(event_id, settings.bookmakers)
+            except httpx.HTTPStatusError as exc:
+                logger.warning("Force live alert odds falhou para %s com HTTP %s.", event_id, exc.response.status_code)
+                continue
+            if not odds_payload:
+                continue
+            markets = flatten_all_markets(odds_payload, fixture_id=fixture_id, min_odd=1.01)
+            if not markets:
+                continue
+            market = sorted(markets, key=lambda item: item.odd, reverse=True)[0]
+            score_home, score_away = extract_score(fixture)
+            league = event.get("league", {}).get("name") if isinstance(event.get("league"), dict) else event.get("league", "")
+            minute = extract_minute(fixture)
+            score = f"{score_home if score_home is not None else '?'}x{score_away if score_away is not None else '?'}"
+            line = "" if market.line is None else f"\nLinha: {market.line}"
+            await update.message.reply_text(
+                "ALERTA DE TESTE - JOGO AO VIVO\n\n"
+                "Este alerta foi forcado apenas para validar o envio. Nao e recomendacao oficial da IA.\n\n"
+                f"Jogo: {event.get('home', '')} x {event.get('away', '')}\n"
+                f"Liga: {league or '-'}\n"
+                f"Tempo: {minute if minute is not None else '?'}'\n"
+                f"Placar: {score}\n"
+                f"Mercado: {market.market_name}\n"
+                f"Selecao: {market.selection}{line}\n"
+                f"Odd: {market.odd:.2f}\n"
+                f"Casa: {market.bookmaker}"
+            )
+            return
+
+        await update.message.reply_text("Encontrei jogos ao vivo, mas nenhum retornou mercado de odds utilizavel agora.")
+    except Exception as exc:
+        logger.exception("Erro ao forcar alerta ao vivo")
+        await update.message.reply_text(f"Erro ao forcar alerta ao vivo: {exc}")
+    finally:
+        await http.close()
+
+
 async def envcheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     presence = settings_presence(settings)
@@ -206,6 +263,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("last", last_cmd))
     app.add_handler(CommandHandler("performance", performance_cmd))
     app.add_handler(CommandHandler("scan", scan_cmd))
+    app.add_handler(CommandHandler("force_live_alert", force_live_alert_cmd))
     app.add_handler(CommandHandler("envcheck", envcheck_cmd))
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=5)
     if settings.startup_alert and not settings.dry_run:

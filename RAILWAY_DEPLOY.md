@@ -62,6 +62,7 @@ No Telegram, teste:
 /last
 /performance
 /scan
+/force_live_alert
 /envcheck
 ```
 

@@ -15,6 +15,7 @@ MVP em Python para monitorar jogos ao vivo, buscar odds na Odds-API.io, buscar e
 - Evita repetir a mesma entrada.
 - Tem comandos `/status`, `/last` e `/performance`.
 - Tem comando `/scan` para forcar uma varredura manual.
+- Tem comando `/force_live_alert` para enviar um alerta de teste usando um jogo ao vivo real.
 - Tem comando `/envcheck` para conferir quais variaveis o deploy esta enxergando.
 - Tenta liquidar entradas de gols e escanteios quando houver dados finais suficientes.
 
