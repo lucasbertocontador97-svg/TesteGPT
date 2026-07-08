@@ -116,6 +116,55 @@ def _next_goal_conviction(probability_score: int, total_shots: float, shots_on: 
     return min(95, probability_score + bonus)
 
 
+def _next_corner_conviction(
+    *,
+    probability_score: int,
+    minute: int,
+    corners: float,
+    total_shots: float,
+    shots_on: float,
+    pressure: float,
+) -> int:
+    bonus = 0
+    expected_so_far = max(1.0, 9.5 * minute / 90)
+    corner_pace = corners / expected_so_far
+
+    if corner_pace >= 1.25:
+        bonus += 10
+    elif corner_pace >= 1.0:
+        bonus += 6
+
+    if pressure >= 70:
+        bonus += 10
+    elif pressure >= 55:
+        bonus += 7
+    elif pressure >= 40:
+        bonus += 4
+
+    if total_shots >= 14:
+        bonus += 7
+    elif total_shots >= 10:
+        bonus += 4
+
+    if shots_on >= 5:
+        bonus += 4
+
+    if 32 <= minute <= 44:
+        bonus += 3
+    elif 78 <= minute <= 86:
+        bonus += 5
+
+    return min(95, probability_score + bonus)
+
+
+def _next_corner_window(minute: int) -> tuple[str, float] | None:
+    if 32 <= minute <= 44:
+        return "Asian Corner +0.5 HT", 0.55
+    if 78 <= minute <= 86:
+        return "Asian Corner +0.5 FT", 0.60
+    return None
+
+
 def evaluate_game(
     *,
     minute: int | None,
@@ -187,12 +236,21 @@ def evaluate_game(
                 )
             )
 
-    corner_mean = _corner_lambda(minute, corners, total_shots, pressure)
-    if 32 <= minute <= 40 or 78 <= minute <= 86:
+    corner_window = _next_corner_window(minute)
+    if corner_window:
+        strategy_name, threshold = corner_window
+        corner_mean = _corner_lambda(minute, corners, total_shots, pressure)
         prob = _poisson_at_least(corner_mean, 1)
-        threshold = 0.60 if minute <= 40 else 0.70
         score = round(prob * 100)
-        if prob >= threshold and score >= min_confidence:
+        conviction = _next_corner_conviction(
+            probability_score=score,
+            minute=minute,
+            corners=corners,
+            total_shots=total_shots,
+            shots_on=shots_on,
+            pressure=pressure,
+        )
+        if prob >= threshold and conviction >= min_confidence:
             candidates.append(
                 DeterministicSignal(
                     True,
@@ -200,10 +258,10 @@ def evaluate_game(
                     "over",
                     corners + 0.5,
                     prob,
-                    score,
-                    score,
-                    f"Poisson {prob:.0%} para mais um escanteio; escanteios atuais {corners:g}, {pressure_label}.",
-                    "Asian Corner +0.5 HT" if minute <= 40 else "Asian Corner +0.5 FT",
+                    conviction,
+                    conviction,
+                    f"Probabilidade {prob:.0%} de pelo menos mais um escanteio; linha sugerida over {corners + 0.5:g}; conviccao {conviction} por escanteios {corners:g}, chutes {total_shots:g}, no gol {shots_on:g} e {pressure_label}.",
+                    strategy_name,
                 )
             )
 
