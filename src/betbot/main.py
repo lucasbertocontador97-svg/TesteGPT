@@ -588,6 +588,64 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
         storage.close()
 
 
+async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Diagnosticando jogos ao vivo e filtros...")
+        api_football = ApiFootballClient(settings.api_football_key, http)
+        fixtures = await api_football.live_fixtures()
+        if not fixtures:
+            await update.message.reply_text("A API-Football nao retornou jogos ao vivo agora.")
+            return
+
+        lines = [f"Jogos ao vivo analisados: {min(len(fixtures), 10)}"]
+        for fixture in fixtures[:10]:
+            fixture_id = fixture.get("fixture", {}).get("id")
+            teams = fixture.get("teams", {})
+            home = str(teams.get("home", {}).get("name") or "")
+            away = str(teams.get("away", {}).get("name") or "")
+            league = str(fixture.get("league", {}).get("name", "") or "")
+            minute = extract_minute(fixture)
+            score_home, score_away = extract_score(fixture)
+            if not fixture_id:
+                lines.append(f"- {home} x {away}: sem fixture_id")
+                continue
+            stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id)))
+            required_confidence = settings.min_confidence
+            flags = []
+            if is_high_variance_match(league, home, away):
+                required_confidence = max(required_confidence, 85)
+                flags.append("alta variancia")
+            if minute is not None and minute < 25:
+                required_confidence = max(required_confidence, 85)
+                flags.append("muito cedo")
+            if not has_actionable_stats(stats):
+                summary = "sem stats acionaveis"
+            else:
+                signal = evaluate_game(
+                    minute=minute,
+                    score_home=score_home,
+                    score_away=score_away,
+                    stats=stats,
+                    min_confidence=required_confidence,
+                )
+                if signal.approved:
+                    summary = f"APROVADO {signal.strategy} {signal.probability:.0%}"
+                else:
+                    summary = f"bloqueado: {signal.reason}"
+            score = f"{score_home if score_home is not None else '?'}x{score_away if score_away is not None else '?'}"
+            flag_text = f" [{', '.join(flags)}]" if flags else ""
+            lines.append(f"- {home} x {away} {score} {minute or '?'}'{flag_text}: {summary}")
+
+        await update.message.reply_text("\n".join(lines)[:3900])
+    except Exception as exc:
+        logger.exception("Erro no diagnostico de filtros")
+        await update.message.reply_text(f"Erro no diagnostico de filtros: {type(exc).__name__}")
+    finally:
+        await http.close()
+
+
 async def scheduled_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     storage = Storage(settings.database_path)
@@ -626,6 +684,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("test_analysis_no_odds", test_analysis_no_odds_cmd))
     app.add_handler(CommandHandler("official_no_odds", official_no_odds_cmd))
     app.add_handler(CommandHandler("force_verified_entry", force_verified_entry_cmd))
+    app.add_handler(CommandHandler("debug_live_filters", debug_live_filters_cmd))
     app.add_handler(CommandHandler("envcheck", envcheck_cmd))
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=min(60, settings.poll_seconds))
     if settings.startup_alert and not settings.dry_run:
