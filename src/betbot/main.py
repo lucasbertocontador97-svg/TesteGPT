@@ -42,7 +42,11 @@ def market_label(market_family: str, selection: str) -> str:
 
 
 def verified_alert_key(game: GameSnapshot, market_family: str, selection: str, line: float | None) -> str:
-    return f"verified|{game.fixture_id}|{market_family}|{selection}|{line}|{game.minute or ''}"
+    return f"verified|{game.fixture_id}|{market_family}|{selection}|{line}"
+
+
+def odds_alert_key(game: GameSnapshot, market_family: str, selection: str, line: float | None) -> str:
+    return f"odds|{game.fixture_id or game.event_id}|{market_family}|{selection}|{line}"
 
 
 async def load_sportmonks_live(settings, http: HttpJsonClient) -> list[dict]:
@@ -286,7 +290,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     chosen.line or target_line,
                     target_reason,
                     target_stake,
-                    chosen.alert_key,
+                    odds_alert_key(game, target_family, target_selection, chosen.line or target_line),
                     bookmaker_links,
                 )
             if storage.seen_alert(decision.alert_key):
@@ -733,7 +737,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 ("corners", "under"): "Menos escanteios",
             }.get((math_signal.market_family, math_signal.selection), f"{math_signal.market_family} {math_signal.selection}")
             final_line = math_signal.line
-            alert_key = f"no-odds|{game.fixture_id}|{math_signal.market_family}|{math_signal.selection}|{final_line}|{game.minute or ''}"
+            alert_key = verified_alert_key(game, math_signal.market_family, math_signal.selection, final_line)
             if storage.seen_alert(alert_key):
                 await update.message.reply_text("O motor encontrou uma entrada sem odds, mas ela ja foi enviada antes.")
                 return
@@ -860,7 +864,7 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
             ("corners", "over"): "Mais escanteios",
             ("corners", "under"): "Menos escanteios",
         }.get((signal.market_family, signal.selection), f"{signal.market_family} {signal.selection}")
-        alert_key = f"verified|{game.fixture_id}|{signal.market_family}|{signal.selection}|{signal.line}|{game.minute or ''}"
+        alert_key = verified_alert_key(game, signal.market_family, signal.selection, signal.line)
         if storage.seen_alert(alert_key):
             await update.message.reply_text("A melhor entrada veridica encontrada ja foi enviada antes.")
             return
