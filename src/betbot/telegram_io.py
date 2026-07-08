@@ -14,6 +14,21 @@ def _selection_label(selection: str) -> str:
     return labels.get(selection.lower(), selection)
 
 
+def _short_reason(reason: str, limit: int = 220) -> str:
+    text = " ".join(str(reason or "").split())
+    if " IA: " in text:
+        text = text.split(" IA: ", 1)[0].strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _market_text(market: str, selection: str) -> str:
+    if market.lower().startswith(selection.lower()):
+        return market
+    return f"{selection} {market}"
+
+
 def format_alert(game: GameSnapshot, decision: Decision) -> str:
     score = "x".join(
         [
@@ -24,20 +39,20 @@ def format_alert(game: GameSnapshot, decision: Decision) -> str:
     minute = "?" if game.minute is None else f"{game.minute}'"
     market = f"{decision.market}{_line_label(decision.line)}"
     selection = _selection_label(decision.selection)
+    market_text = _market_text(market, selection)
     odd_text = f"{decision.odd:.2f}" if decision.odd > 0 else "sem cotacao live"
     bookmaker_text = decision.bookmaker if decision.odd > 0 else "conferir manualmente"
+    reason = _short_reason(decision.reason)
     return (
-        f"\U0001f534 AO VIVO {minute} {score}\n"
-        "\u2705 ENTRADA APROVADA\n\n"
+        "\u2705 ENTRADA APROVADA\n"
+        f"\U0001f534 {minute} | {score}\n\n"
         f"\u26bd {game.home} vs {game.away}\n"
         f"\U0001f3c6 {game.league or '-'}\n\n"
-        f"\U0001f4ca Mercado: {market}\n"
-        f"\U0001f3af Direcao: {selection}\n"
-        f"\U0001f3e6 Odd real: {odd_text}\n"
-        f"\U0001f3e0 Casa encontrada: {bookmaker_text}\n"
-        f"\U0001f4c8 Score: {decision.confidence}/100\n"
-        f"\U0001f4b0 Stake: {decision.stake}\n\n"
-        f"\U0001f9e0 Motivo: {decision.reason}"
+        f"\U0001f4ca {market_text}\n"
+        f"\U0001f3e6 Odd: {odd_text}\n"
+        f"\U0001f3e0 Casa: {bookmaker_text}\n"
+        f"\U0001f4c8 Score: {decision.confidence}/100 | Stake: {decision.stake}\n\n"
+        f"\U0001f9e0 {reason}"
     )
 
 
