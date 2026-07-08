@@ -102,7 +102,7 @@ class ApiFootballClient:
 
 
 class SportmonksClient:
-    base_url = "https://api.sportmonks.com/v3/football"
+    base_url = "https://api.sportmonks.com/api/v3/football"
 
     def __init__(self, api_token: str, http: HttpJsonClient) -> None:
         self.api_token = api_token

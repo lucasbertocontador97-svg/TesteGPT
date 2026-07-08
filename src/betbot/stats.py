@@ -102,7 +102,7 @@ def compact_sportmonks_statistics(fixture: dict[str, Any]) -> dict[str, Any]:
             team_name = home if location == "home" else away if location == "away" else None
         if not team_name:
             continue
-        result.setdefault(team_name, {})[name] = _sportmonks_value(stat.get("value"))
+        result.setdefault(team_name, {})[name] = _sportmonks_value(stat.get("data") if "data" in stat else stat.get("value"))
     return {team: values for team, values in result.items() if values}
 
 
