@@ -17,6 +17,7 @@ python -m src.betbot.main
 ```env
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
+TELEGRAM_WEBHOOK_PATH=telegram/webhook
 ODDS_API_KEY=
 API_FOOTBALL_KEY=
 SPORTMONKS_API_TOKEN=
@@ -36,6 +37,21 @@ ODDS_USE_MULTI=false
 ```
 
 `OPENAI_MODEL` pode ficar vazio; o bot usa o padrao do codigo.
+
+## Evitar conflito do Telegram
+
+Para eliminar `Conflict: terminated by other getUpdates request`, use webhook no Railway:
+
+1. No servico do bot, abra `Settings`.
+2. Em `Networking`, gere um dominio publico.
+3. O Railway normalmente cria `RAILWAY_PUBLIC_DOMAIN` automaticamente. Se isso nao aparecer, adicione:
+
+```env
+TELEGRAM_WEBHOOK_URL=https://seu-dominio.up.railway.app
+TELEGRAM_WEBHOOK_PATH=telegram/webhook
+```
+
+Com URL publica, o bot usa webhook e para de usar `getUpdates`.
 
 ## Historico persistente
 

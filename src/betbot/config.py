@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 class Settings:
     telegram_bot_token: str
     telegram_chat_id: str
+    telegram_webhook_url: str | None
+    telegram_webhook_path: str
+    port: int
     odds_api_key: str
     api_football_key: str
     sportmonks_api_token: str | None
@@ -36,9 +39,14 @@ def load_settings() -> Settings:
     volume_path = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
     default_db_path = Path(volume_path) / "bot.sqlite3" if volume_path else Path("bot.sqlite3")
     db_path = Path(os.getenv("DATABASE_PATH", str(default_db_path)))
+    railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+    webhook_base_url = os.getenv("TELEGRAM_WEBHOOK_URL") or (f"https://{railway_domain}" if railway_domain else None)
     return Settings(
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
+        telegram_webhook_url=webhook_base_url.rstrip("/") if webhook_base_url else None,
+        telegram_webhook_path=os.getenv("TELEGRAM_WEBHOOK_PATH", "telegram/webhook").strip("/"),
+        port=int(os.getenv("PORT", "8080")),
         odds_api_key=os.getenv("ODDS_API_KEY", ""),
         api_football_key=os.getenv("API_FOOTBALL_KEY", ""),
         sportmonks_api_token=os.getenv("SPORTMONKS_API_TOKEN") or None,
@@ -88,6 +96,7 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
     return {
         "TELEGRAM_BOT_TOKEN": bool(settings.telegram_bot_token),
         "TELEGRAM_CHAT_ID": bool(settings.telegram_chat_id),
+        "TELEGRAM_WEBHOOK_URL": bool(settings.telegram_webhook_url),
         "ODDS_API_KEY": bool(settings.odds_api_key),
         "API_FOOTBALL_KEY": bool(settings.api_football_key),
         "SPORTMONKS_API_TOKEN": bool(settings.sportmonks_api_token),

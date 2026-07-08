@@ -7,6 +7,7 @@ from datetime import date
 
 import httpx
 from telegram import Update
+from telegram.error import Conflict
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
@@ -1110,6 +1111,9 @@ def with_timeout(handler, seconds: float, label: str):
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if isinstance(context.error, Conflict):
+        logger.error("Conflito no Telegram getUpdates: existe outra instancia do mesmo bot em polling.")
+        return
     logger.exception("Erro nao tratado no Telegram handler", exc_info=context.error)
     if isinstance(update, Update) and update.message:
         await update.message.reply_text(f"Erro interno: {type(context.error).__name__}")
@@ -1143,7 +1147,19 @@ def run_bot() -> None:
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=min(60, settings.poll_seconds))
     if settings.startup_alert and not settings.dry_run:
         app.job_queue.run_once(startup_alert_job, when=1)
-    app.run_polling(drop_pending_updates=True)
+    if settings.telegram_webhook_url:
+        webhook_url = f"{settings.telegram_webhook_url}/{settings.telegram_webhook_path}"
+        logger.info("Iniciando Telegram via webhook em %s na porta %s.", webhook_url, settings.port)
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=settings.port,
+            url_path=settings.telegram_webhook_path,
+            webhook_url=webhook_url,
+            drop_pending_updates=True,
+        )
+    else:
+        logger.info("Iniciando Telegram via polling. Use TELEGRAM_WEBHOOK_URL para evitar conflitos de getUpdates.")
+        app.run_polling(drop_pending_updates=True)
 
 
 async def run_once() -> None:
