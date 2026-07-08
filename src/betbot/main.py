@@ -209,33 +209,44 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 model=settings.openai_model,
                 min_confidence=required_confidence,
             )
-            if not idea.should_check_odds:
-                logger.info("IA nao pediu odds: %s x %s - %s", game.home, game.away, idea.reason)
-                continue
-            if idea.market_family != math_signal.market_family or idea.selection != math_signal.selection:
-                logger.info("IA divergiu do motor matematico em %s x %s.", game.home, game.away)
-                continue
+            target_family = math_signal.market_family
+            target_selection = math_signal.selection
+            target_line = math_signal.line
+            target_confidence = math_signal.confidence
+            target_reason = math_signal.reason
+            target_stake = "baixa"
+            if idea.should_check_odds and idea.market_family == math_signal.market_family and idea.selection == math_signal.selection:
+                target_confidence = max(math_signal.confidence, idea.confidence)
+                target_reason = f"{math_signal.reason} IA: {idea.reason}"
+                target_stake = idea.stake
+            else:
+                logger.info(
+                    "IA nao confirmou o sinal matematico em %s x %s; seguindo pelo motor matematico. IA: %s",
+                    game.home,
+                    game.away,
+                    idea.reason,
+                )
             try:
                 odds_payload = await odds_api.odds(game.event_id, settings.bookmakers)
             except httpx.HTTPStatusError as exc:
-                logger.warning("Odds apos ideia da IA falhou para %s com HTTP %s.", game.event_id, exc.response.status_code)
+                logger.warning("Odds apos sinal matematico falhou para %s com HTTP %s.", game.event_id, exc.response.status_code)
                 continue
             markets = flatten_markets(odds_payload or {}, fixture_id=game.fixture_id, min_odd=settings.min_odd)
-            compatible = [market for market in markets if market_matches_idea(market, idea.market_family, idea.selection, idea.line)]
+            compatible = [market for market in markets if market_matches_idea(market, target_family, target_selection, target_line)]
             if not compatible:
-                logger.info("Sem odd >= %.2f para ideia %s/%s em %s x %s", settings.min_odd, idea.market_family, idea.selection, game.home, game.away)
+                logger.info("Sem odd >= %.2f para sinal %s/%s em %s x %s", settings.min_odd, target_family, target_selection, game.home, game.away)
                 continue
             chosen = sorted(compatible, key=lambda market: market.odd, reverse=True)[0]
             decision = Decision(
                 True,
-                idea.confidence,
+                target_confidence,
                 chosen.market_name,
                 chosen.selection,
                 chosen.bookmaker,
                 chosen.odd,
-                chosen.line or idea.line,
-                idea.reason,
-                idea.stake,
+                chosen.line or target_line,
+                target_reason,
+                target_stake,
                 chosen.alert_key,
             )
             if storage.seen_alert(decision.alert_key):
@@ -517,35 +528,43 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 model=settings.openai_model,
                 min_confidence=required_confidence,
             )
-            if not idea.should_check_odds:
-                logger.info("Sem entrada sem odds: %s x %s - %s", game.home, game.away, idea.reason)
-                continue
-            if idea.market_family != math_signal.market_family or idea.selection != math_signal.selection:
-                logger.info("IA divergiu do motor matematico em %s x %s.", game.home, game.away)
-                continue
+            if idea.should_check_odds and idea.market_family == math_signal.market_family and idea.selection == math_signal.selection:
+                final_confidence = max(math_signal.confidence, idea.confidence)
+                final_reason = f"{math_signal.reason} IA: {idea.reason}"
+                final_stake = idea.stake
+            else:
+                logger.info(
+                    "Entrada sem odds seguindo motor matematico em %s x %s; IA nao confirmou: %s",
+                    game.home,
+                    game.away,
+                    idea.reason,
+                )
+                final_confidence = math_signal.confidence
+                final_reason = math_signal.reason
+                final_stake = "baixa"
 
             market_label = {
                 ("goals", "over"): "Mais gols",
                 ("goals", "under"): "Menos gols",
                 ("corners", "over"): "Mais escanteios",
                 ("corners", "under"): "Menos escanteios",
-            }.get((idea.market_family, idea.selection), f"{idea.market_family} {idea.selection}")
-            final_line = math_signal.line if math_signal.line is not None else idea.line
-            alert_key = f"no-odds|{game.fixture_id}|{idea.market_family}|{idea.selection}|{final_line}|{game.minute or ''}"
+            }.get((math_signal.market_family, math_signal.selection), f"{math_signal.market_family} {math_signal.selection}")
+            final_line = math_signal.line
+            alert_key = f"no-odds|{game.fixture_id}|{math_signal.market_family}|{math_signal.selection}|{final_line}|{game.minute or ''}"
             if storage.seen_alert(alert_key):
-                await update.message.reply_text("A IA encontrou uma entrada sem odds, mas ela ja foi enviada antes.")
+                await update.message.reply_text("O motor encontrou uma entrada sem odds, mas ela ja foi enviada antes.")
                 return
 
             decision = Decision(
                 True,
-                idea.confidence,
+                final_confidence,
                 market_label,
-                idea.selection,
+                math_signal.selection,
                 "Conferir manualmente",
                 0.0,
                 final_line,
-                f"{math_signal.reason} IA: {idea.reason}",
-                idea.stake,
+                final_reason,
+                final_stake,
                 alert_key,
             )
             storage.save_manual_alert(game, decision)
@@ -560,11 +579,11 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"Tempo: {minute}\n"
                 f"Placar: {score}\n"
                 f"Mercado indicado: {market_label}{line_label}\n"
-                f"Direcao: {idea.selection}\n"
-                f"Confianca IA: {idea.confidence}%\n"
+                f"Direcao: {math_signal.selection}\n"
+                f"Confianca final: {final_confidence}%\n"
                 f"Probabilidade matematica: {math_signal.probability:.0%}\n"
                 f"Estrategia: {math_signal.strategy}\n"
-                f"Stake: {idea.stake}\n"
+                f"Stake: {final_stake}\n"
                 f"Filtro aplicado: confianca minima {required_confidence}%"
                 f"{' (' + ', '.join(caution_notes) + ')' if caution_notes else ''}\n\n"
                 f"Estatisticas usadas:\n{compact_stats_summary(game.stats)}\n\n"
@@ -987,7 +1006,7 @@ def run_bot() -> None:
     app.job_queue.run_repeating(scheduled_job, interval=settings.poll_seconds, first=min(60, settings.poll_seconds))
     if settings.startup_alert and not settings.dry_run:
         app.job_queue.run_once(startup_alert_job, when=1)
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 
 async def run_once() -> None:
