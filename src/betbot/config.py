@@ -13,6 +13,9 @@ class Settings:
     telegram_chat_id: str
     telegram_webhook_url: str | None
     telegram_webhook_path: str
+    railway_public_domain: str | None
+    railway_service_id: str | None
+    allow_polling: bool
     port: int
     odds_api_key: str
     api_football_key: str
@@ -48,6 +51,9 @@ def load_settings() -> Settings:
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         telegram_webhook_url=webhook_base_url.rstrip("/") if webhook_base_url else None,
         telegram_webhook_path=os.getenv("TELEGRAM_WEBHOOK_PATH", "telegram/webhook").strip("/"),
+        railway_public_domain=railway_domain or None,
+        railway_service_id=os.getenv("RAILWAY_SERVICE_ID") or None,
+        allow_polling=os.getenv("ALLOW_POLLING", "false").lower() in {"1", "true", "yes", "sim"},
         port=int(os.getenv("PORT", "8080")),
         odds_api_key=os.getenv("ODDS_API_KEY", ""),
         api_football_key=os.getenv("API_FOOTBALL_KEY", ""),
@@ -101,6 +107,9 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
         "TELEGRAM_BOT_TOKEN": bool(settings.telegram_bot_token),
         "TELEGRAM_CHAT_ID": bool(settings.telegram_chat_id),
         "TELEGRAM_WEBHOOK_URL": bool(settings.telegram_webhook_url),
+        "RAILWAY_PUBLIC_DOMAIN": bool(settings.railway_public_domain),
+        "RAILWAY_SERVICE_ID": bool(settings.railway_service_id),
+        "ALLOW_POLLING": settings.allow_polling,
         "ODDS_API_KEY": bool(settings.odds_api_key),
         "API_FOOTBALL_KEY": bool(settings.api_football_key),
         "SPORTMONKS_API_TOKEN": bool(settings.sportmonks_api_token),

@@ -1409,7 +1409,16 @@ def run_bot() -> None:
             drop_pending_updates=True,
         )
     else:
-        logger.info("Iniciando Telegram via polling. Use TELEGRAM_WEBHOOK_URL para evitar conflitos de getUpdates.")
+        if settings.railway_service_id and not settings.allow_polling:
+            raise RuntimeError(
+                "Railway detectado sem TELEGRAM_WEBHOOK_URL/RAILWAY_PUBLIC_DOMAIN. "
+                "Polling foi bloqueado para evitar Conflict/getUpdates. "
+                "Configure uma URL publica no Railway e defina TELEGRAM_WEBHOOK_URL com essa URL, "
+                "ou use ALLOW_POLLING=true somente para teste controlado."
+            )
+        logger.info(
+            "Iniciando Telegram via polling. Use TELEGRAM_WEBHOOK_URL para evitar conflitos de getUpdates."
+        )
         app.run_polling(drop_pending_updates=True)
 
 
