@@ -286,6 +286,10 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         storage.close()
 
 
+async def ping_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("pong")
+
+
 async def last_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     storage = Storage(settings.database_path)
@@ -1001,6 +1005,24 @@ async def startup_alert_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+def with_timeout(handler, seconds: float, label: str):
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        try:
+            await asyncio.wait_for(handler(update, context), timeout=seconds)
+        except TimeoutError:
+            logger.warning("Comando %s passou de %.0fs e foi cancelado.", label, seconds)
+            if update.message:
+                await update.message.reply_text(f"{label} demorou demais e foi cancelado. Tente novamente em alguns segundos.")
+
+    return wrapped
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.exception("Erro nao tratado no Telegram handler", exc_info=context.error)
+    if isinstance(update, Update) and update.message:
+        await update.message.reply_text(f"Erro interno: {type(context.error).__name__}")
+
+
 def run_bot() -> None:
     settings = load_settings()
     require_telegram_settings(settings)
@@ -1008,16 +1030,18 @@ def run_bot() -> None:
     if settings.dry_run:
         logger.warning("DRY_RUN=true: o bot nao enviara mensagens. Use 'once' para testar a coleta.")
 
-    app = Application.builder().token(settings.telegram_bot_token).build()
+    app = Application.builder().token(settings.telegram_bot_token).concurrent_updates(True).build()
+    app.add_error_handler(error_handler)
+    app.add_handler(CommandHandler("ping", ping_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("last", last_cmd))
     app.add_handler(CommandHandler("performance", performance_cmd))
     app.add_handler(CommandHandler("scan", scan_cmd))
     app.add_handler(CommandHandler("force_live_alert", force_live_alert_cmd))
     app.add_handler(CommandHandler("test_analysis_no_odds", test_analysis_no_odds_cmd))
-    app.add_handler(CommandHandler("official_no_odds", official_no_odds_cmd))
-    app.add_handler(CommandHandler("force_verified_entry", force_verified_entry_cmd))
-    app.add_handler(CommandHandler("debug_live_filters", debug_live_filters_cmd))
+    app.add_handler(CommandHandler("official_no_odds", with_timeout(official_no_odds_cmd, 60, "/official_no_odds")))
+    app.add_handler(CommandHandler("force_verified_entry", with_timeout(force_verified_entry_cmd, 60, "/force_verified_entry")))
+    app.add_handler(CommandHandler("debug_live_filters", with_timeout(debug_live_filters_cmd, 45, "/debug_live_filters")))
     app.add_handler(CommandHandler("debug_sportmonks", debug_sportmonks_cmd))
     app.add_handler(CommandHandler("debug_api_football_stats", debug_api_football_stats_cmd))
     app.add_handler(CommandHandler("debug_thestatsapi", debug_thestatsapi_cmd))
