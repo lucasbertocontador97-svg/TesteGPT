@@ -25,6 +25,7 @@ class Settings:
     database_path: Path
     startup_alert: bool
     odds_use_multi: bool
+    odds_detail_limit: int
 
 
 def load_settings() -> Settings:
@@ -49,6 +50,7 @@ def load_settings() -> Settings:
         database_path=db_path,
         startup_alert=os.getenv("STARTUP_ALERT", "true").lower() in {"1", "true", "yes", "sim"},
         odds_use_multi=os.getenv("ODDS_USE_MULTI", "false").lower() in {"1", "true", "yes", "sim"},
+        odds_detail_limit=max(1, int(os.getenv("ODDS_DETAIL_LIMIT", "5"))),
     )
 
 
