@@ -154,7 +154,7 @@ def _nil_nil_goal_conviction(
     elif corners >= 3:
         bonus += 3
 
-    if 32 <= minute <= 39:
+    if 18 <= minute <= 25:
         bonus += 5
     elif 62 <= minute <= 80:
         bonus += 4
@@ -165,8 +165,8 @@ def _nil_nil_goal_conviction(
 def _nil_nil_goal_window(minute: int, current_goals: int) -> tuple[str, int, float] | None:
     if current_goals != 0:
         return None
-    if 32 <= minute <= 39:
-        return "Over 0.5 HT", 45, 0.30
+    if 18 <= minute <= 25:
+        return "Over 0.5 HT", 45, 0.40
     if 62 <= minute <= 80:
         return "Over 0.5 FT", 90, 0.45
     return None
