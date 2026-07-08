@@ -17,7 +17,7 @@ from .markets import flatten_all_markets, flatten_markets, market_matches_idea
 from .matching import find_matching_odds_event, find_matching_sportmonks_fixture, sportmonks_participant_names
 from .models import Decision, GameSnapshot
 from .settlement import settle_alert
-from .stats import compact_sportmonks_statistics, compact_statistics, compact_stats_summary, extract_minute, extract_score, has_actionable_stats, is_high_variance_match
+from .stats import compact_player_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, extract_minute, extract_score, has_actionable_stats, is_high_variance_match
 from .storage import Storage
 from .telegram_io import format_alert, send_message
 
@@ -62,7 +62,12 @@ async def fixture_stats_with_sportmonks_fallback(
                 sportmonks_stats = compact_sportmonks_statistics(detailed or {})
             except httpx.HTTPStatusError as exc:
                 logger.warning("Sportmonks fixture %s falhou com HTTP %s.", sportmonks_fixture_id, exc.response.status_code)
-    return sportmonks_stats if has_actionable_stats(sportmonks_stats) else api_stats
+    if has_actionable_stats(sportmonks_stats):
+        return sportmonks_stats
+    if has_actionable_stats(api_stats):
+        return api_stats
+    player_stats = compact_player_statistics(await api_football.fixture_players(int(fixture_id))) if fixture_id else {}
+    return player_stats if has_actionable_stats(player_stats) else api_stats
 
 
 async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFootballClient) -> list[GameSnapshot]:
@@ -759,6 +764,8 @@ async def debug_api_football_stats_cmd(update: Update, context: ContextTypes.DEF
                 continue
             raw = await api_football.fixture_statistics(int(fixture_id))
             compact = compact_statistics(raw)
+            players_raw = await api_football.fixture_players(int(fixture_id))
+            players_compact = compact_player_statistics(players_raw)
             stat_names = []
             for team_stats in raw:
                 team_name = team_stats.get("team", {}).get("name", "?")
@@ -767,9 +774,12 @@ async def debug_api_football_stats_cmd(update: Update, context: ContextTypes.DEF
             score = f"{score_home if score_home is not None else '?'}x{score_away if score_away is not None else '?'}"
             lines.append(
                 f"- {home} x {away} {score} {minute or '?'}' fixture={fixture_id}: "
-                f"times_stats={len(raw)} acionavel={'sim' if has_actionable_stats(compact) else 'nao'}"
+                f"times_stats={len(raw)} player_stats={len(players_raw)} "
+                f"acionavel={'sim' if has_actionable_stats(compact) or has_actionable_stats(players_compact) else 'nao'}"
             )
             lines.extend([f"  {item}" for item in stat_names[:2]])
+            if players_compact and not compact:
+                lines.append(f"  fallback players: {compact_stats_summary(players_compact).replace(chr(10), ' | ')}")
         await update.message.reply_text("\n".join(lines)[:3900])
     except httpx.HTTPStatusError as exc:
         logger.warning("Erro HTTP no diagnostico API-Football: %s", exc.response.status_code)

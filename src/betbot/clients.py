@@ -95,6 +95,14 @@ class ApiFootballClient:
         )
         return data.get("response", []) if isinstance(data, dict) else []
 
+    async def fixture_players(self, fixture_id: int) -> list[dict[str, Any]]:
+        data = await self.http.get_json(
+            f"{self.base_url}/fixtures/players",
+            params={"fixture": fixture_id},
+            headers=self.headers,
+        )
+        return data.get("response", []) if isinstance(data, dict) else []
+
     async def fixture_by_id(self, fixture_id: int) -> dict[str, Any] | None:
         data = await self.http.get_json(f"{self.base_url}/fixtures", params={"id": fixture_id}, headers=self.headers)
         response = data.get("response", []) if isinstance(data, dict) else []

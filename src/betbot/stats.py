@@ -31,6 +31,40 @@ def compact_statistics(stats_response: list[dict[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def compact_player_statistics(players_response: list[dict[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for team_block in players_response:
+        team = team_block.get("team", {}).get("name", "unknown")
+        totals = {
+            "Total Shots": 0,
+            "Shots on Goal": 0,
+            "Shots off Goal": 0,
+        }
+        found = False
+        for player in team_block.get("players", []):
+            stats_rows = player.get("statistics", [])
+            if not stats_rows:
+                continue
+            row = stats_rows[0]
+            shots = row.get("shots", {}) if isinstance(row.get("shots"), dict) else {}
+            total = shots.get("total")
+            on = shots.get("on")
+            try:
+                if total is not None:
+                    totals["Total Shots"] += int(total)
+                    found = True
+                if on is not None:
+                    totals["Shots on Goal"] += int(on)
+                    found = True
+                    if total is not None:
+                        totals["Shots off Goal"] += max(0, int(total) - int(on))
+            except (TypeError, ValueError):
+                continue
+        if found:
+            result[team] = totals
+    return result
+
+
 SPORTMONKS_TYPE_ID_MAP = {
     34: "Corner Kicks",
     41: "Shots off Goal",
