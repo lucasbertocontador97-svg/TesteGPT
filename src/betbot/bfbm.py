@@ -93,7 +93,7 @@ def _tip_market(alert: dict[str, Any]) -> dict[str, str] | None:
 def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, str] | None:
     market = _tip_market(alert)
     event_name = _event_name(alert)
-    if str(alert.get("league", "")).upper() == "BFBM TESTE SIMPLES":
+    if str(alert.get("league", "")).upper() == "BFBM TESTE SIMPLES" or str(alert.get("event_id", "")).startswith("bfbm-simple-"):
         event_name = ""
     if not market or not market.get("SelectionName"):
         return None
@@ -129,4 +129,23 @@ def tips_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
         row = alert_to_bfbm_row(alert, config)
         if row:
             writer.writerow(row)
+    return buffer.getvalue()
+
+
+def debug_minimal_csv(config: BfbmConfig) -> str:
+    buffer = io.StringIO(newline="")
+    columns = ["Provider", "SelectionName", "MarketType", "BetType", "Size", "MinPrice", "MaxPrice"]
+    writer = csv.DictWriter(buffer, fieldnames=columns)
+    writer.writeheader()
+    writer.writerow(
+        {
+            "Provider": config.provider,
+            "SelectionName": "Over 2.5 Goals",
+            "MarketType": "OVER_UNDER_25",
+            "BetType": "BACK",
+            "Size": f"{config.stake:.2f}",
+            "MinPrice": f"{config.min_price:.2f}",
+            "MaxPrice": f"{config.max_price:.2f}",
+        }
+    )
     return buffer.getvalue()

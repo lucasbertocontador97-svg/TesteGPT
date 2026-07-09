@@ -14,7 +14,7 @@ from telegram.error import BadRequest, Conflict
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
-from .bfbm import BfbmConfig, tips_csv
+from .bfbm import BfbmConfig, debug_minimal_csv, tips_csv
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -57,7 +57,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         settings = load_settings()
         parsed = urlparse(self.path)
-        if parsed.path not in {"/bfbm/tips.csv", "/health"}:
+        if parsed.path not in {"/bfbm/tips.csv", "/bfbm/debug-minimal.csv", "/health"}:
             self.send_error(404)
             return
         if parsed.path == "/health":
@@ -72,20 +72,21 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         if settings.bfbm_token and token != settings.bfbm_token:
             self.send_error(403)
             return
-        storage = Storage(settings.database_path)
-        try:
-            alerts = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes)
-        finally:
-            storage.close()
-        body = tips_csv(
-            alerts,
-            BfbmConfig(
-                provider=settings.bfbm_provider,
-                stake=settings.bfbm_stake,
-                min_price=settings.bfbm_min_price,
-                max_price=settings.bfbm_max_price,
-            ),
-        ).encode("utf-8-sig")
+        config = BfbmConfig(
+            provider=settings.bfbm_provider,
+            stake=settings.bfbm_stake,
+            min_price=settings.bfbm_min_price,
+            max_price=settings.bfbm_max_price,
+        )
+        if parsed.path == "/bfbm/debug-minimal.csv":
+            body = debug_minimal_csv(config).encode("utf-8-sig")
+        else:
+            storage = Storage(settings.database_path)
+            try:
+                alerts = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes)
+            finally:
+                storage.close()
+            body = tips_csv(alerts, config).encode("utf-8-sig")
         self.send_response(200)
         self.send_header("Content-Type", "text/csv; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
