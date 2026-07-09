@@ -4,7 +4,6 @@ import asyncio
 import logging
 import sys
 import threading
-from dataclasses import replace
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -16,8 +15,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
 from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_test_csv, tips_csv
-from .betfair import resolve_betfair_ids
-from .clients import ApiFootballClient, BetfairClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
+from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
 from .markets import flatten_all_markets, flatten_markets, market_matches_idea
@@ -251,37 +249,6 @@ def make_totalcorner_client(settings, http: HttpJsonClient) -> TotalCornerClient
     return TotalCornerClient(settings.totalcorner_token, http)
 
 
-def make_betfair_client(settings, http: HttpJsonClient) -> BetfairClient | None:
-    if not settings.betfair_app_key or not settings.betfair_session_token:
-        return None
-    return BetfairClient(settings.betfair_app_key, settings.betfair_session_token, http)
-
-
-async def enrich_decision_with_betfair(
-    betfair_client: BetfairClient | None,
-    game: GameSnapshot,
-    decision: Decision,
-) -> Decision:
-    if not betfair_client:
-        return decision
-    try:
-        ids = await resolve_betfair_ids(betfair_client, game, decision)
-    except Exception as exc:
-        logger.warning("Betfair lookup falhou para %s x %s: %s", game.home, game.away, exc)
-        return decision
-    if not ids:
-        logger.info("Betfair nao encontrou MarketId/SelectionId para %s x %s | %s %.1f", game.home, game.away, decision.market, decision.line or 0)
-        return decision
-    logger.info("Betfair IDs encontrados para %s x %s: market=%s selection=%s", game.home, game.away, ids.market_id, ids.selection_id)
-    return replace(
-        decision,
-        betfair_market_id=ids.market_id,
-        betfair_selection_id=ids.selection_id,
-        betfair_event_id=ids.event_id,
-        betfair_start_time=ids.start_time,
-    )
-
-
 def _first_totalcorner_line(match: dict, keys: tuple[str, ...]) -> tuple[str, str] | None:
     for key in keys:
         value = match.get(key)
@@ -423,7 +390,6 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
     try:
         odds_api = OddsApiClient(settings.odds_api_key, http)
         api_football = ApiFootballClient(settings.api_football_key, http)
-        betfair_client = make_betfair_client(settings, http)
         sent = 0
         snapshots = await build_snapshots(settings, odds_api, api_football)
         odds_payloads: dict[str, dict] = {}
@@ -549,7 +515,6 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     decision.line,
                 )
                 continue
-            decision = await enrich_decision_with_betfair(betfair_client, game, decision)
             if decision.odd > 0:
                 alert_id = storage.save_alert(game, decision)
             else:

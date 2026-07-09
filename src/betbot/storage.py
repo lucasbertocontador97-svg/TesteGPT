@@ -135,9 +135,8 @@ class Storage:
             """
             insert or ignore into alerts (
                 event_id, fixture_id, home, away, minute, market, selection, bookmaker,
-                odd, line, confidence, reason, stake, alert_key,
-                betfair_market_id, betfair_selection_id, betfair_event_id, betfair_start_time
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                odd, line, confidence, reason, stake, alert_key
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 game.event_id,
@@ -154,10 +153,6 @@ class Storage:
                 decision.reason,
                 decision.stake,
                 decision.alert_key,
-                decision.betfair_market_id,
-                decision.betfair_selection_id,
-                decision.betfair_event_id,
-                decision.betfair_start_time,
             ),
         )
         self.conn.commit()
@@ -168,9 +163,8 @@ class Storage:
             """
             insert or ignore into alerts (
                 event_id, fixture_id, home, away, minute, market, selection, bookmaker,
-                odd, line, confidence, reason, stake, alert_key,
-                betfair_market_id, betfair_selection_id, betfair_event_id, betfair_start_time
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                odd, line, confidence, reason, stake, alert_key
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 game.event_id,
@@ -187,10 +181,6 @@ class Storage:
                 decision.reason,
                 decision.stake,
                 decision.alert_key,
-                decision.betfair_market_id,
-                decision.betfair_selection_id,
-                decision.betfair_event_id,
-                decision.betfair_start_time,
             ),
         )
         self.conn.commit()

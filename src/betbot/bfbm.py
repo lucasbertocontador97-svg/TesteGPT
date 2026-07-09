@@ -26,19 +26,7 @@ BFBM_COLUMNS = [
     "BSP",
 ]
 
-BFBM_ACCEPTED_COLUMNS = ["Provider", "SelectionName", "MarketType", "EventName", "BetType", "Size"]
-BFBM_BETFAIR_COLUMNS = [
-    "Provider",
-    "SelectionName",
-    "MarketType",
-    "EventName",
-    "BetType",
-    "Size",
-    "MarketId",
-    "SelectionId",
-    "EventId",
-    "StartTime",
-]
+BFBM_ACCEPTED_COLUMNS = ["Provider", "EventName", "MarketType", "SelectionName", "BetType", "Size"]
 
 
 @dataclass(frozen=True)
@@ -119,12 +107,12 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
         "Handicap": "0",
         "SelectionId": "",
         "MarketId": "",
-        "EventId": str(alert.get("betfair_event_id") or ""),
+        "EventId": "",
         "SelectionName": market["SelectionName"],
         "MarketName": market["MarketName"],
         "EventName": event_name,
         "MarketType": market["MarketType"],
-        "StartTime": str(alert.get("betfair_start_time") or ""),
+        "StartTime": "",
         "BetType": "BACK",
         "Price": price_text,
         "Size": stake_text,
@@ -133,16 +121,13 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
         "MaxPrice": f"{config.max_price:.2f}",
         "BSP": "False",
     }
-    row["MarketId"] = str(alert.get("betfair_market_id") or "")
-    row["SelectionId"] = str(alert.get("betfair_selection_id") or "")
     return row
 
 
 def tips_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
     buffer = io.StringIO(newline="")
     rows = [row for alert in alerts if (row := alert_to_bfbm_row(alert, config))]
-    columns = BFBM_BETFAIR_COLUMNS if any(row.get("MarketId") and row.get("SelectionId") for row in rows) else BFBM_ACCEPTED_COLUMNS
-    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
+    writer = csv.DictWriter(buffer, fieldnames=BFBM_ACCEPTED_COLUMNS, extrasaction="ignore")
     writer.writeheader()
     for row in rows:
         writer.writerow(row)
