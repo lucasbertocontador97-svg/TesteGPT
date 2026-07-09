@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
@@ -69,6 +70,10 @@ def _event_name(alert: dict[str, Any]) -> str:
     if home and away:
         return f"{home} v {away}"
     return home or away
+
+
+def _default_start_time() -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _goal_tip(alert: dict[str, Any]) -> dict[str, str] | None:
@@ -292,7 +297,7 @@ def fresh_match_odds_full_csv(config: BfbmConfig, event_name: str, selection_nam
         "MarketName": "Match Odds",
         "EventName": event_name,
         "MarketType": "MATCH_ODDS",
-        "StartTime": "",
+        "StartTime": _default_start_time(),
         "BetType": "BACK",
         "Price": "0",
         "Size": f"{config.stake:.2f}",
@@ -311,6 +316,7 @@ def fresh_match_odds_ids_csv(
     event_id: str,
     market_id: str,
     selection_id: str,
+    start_time: str = "",
 ) -> str:
     row = {
         "Provider": config.provider,
@@ -322,7 +328,7 @@ def fresh_match_odds_ids_csv(
         "MarketName": "Match Odds",
         "EventName": event_name,
         "MarketType": "MATCH_ODDS",
-        "StartTime": "",
+        "StartTime": start_time or _default_start_time(),
         "BetType": "BACK",
         "Price": "0",
         "Size": f"{config.stake:.2f}",
