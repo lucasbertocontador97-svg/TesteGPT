@@ -168,9 +168,46 @@ def debug_event_csv(config: BfbmConfig, event_name: str) -> str:
     return tips_csv([alert], config) if not row else _single_row_csv(row)
 
 
+def debug_lab_csv(config: BfbmConfig, event_name: str, mode: str) -> str:
+    row = {
+        "Provider": config.provider,
+        "Handicap": "0",
+        "SelectionId": "",
+        "MarketId": "",
+        "EventId": "",
+        "SelectionName": "Over 2.5 Goals",
+        "MarketName": "Over/Under 2.5 Goals",
+        "EventName": event_name,
+        "MarketType": "OVER_UNDER_25",
+        "StartTime": "",
+        "BetType": "BACK",
+        "Price": "",
+        "Size": f"{config.stake:.2f}",
+        "Points": "1",
+        "MinPrice": f"{config.min_price:.2f}",
+        "MaxPrice": f"{config.max_price:.2f}",
+        "BSP": "False",
+    }
+    mode_columns = {
+        "1": ["Provider", "SelectionName"],
+        "2": ["Provider", "SelectionName", "MarketType"],
+        "3": ["Provider", "SelectionName", "MarketType", "EventName"],
+        "4": ["Provider", "SelectionName", "MarketType", "EventName", "BetType"],
+        "5": ["Provider", "SelectionName", "MarketName", "MarketType", "EventName", "BetType", "Size"],
+        "6": ["Provider", "SelectionName", "MarketName", "MarketType", "EventName", "BetType", "Size", "MinPrice", "MaxPrice"],
+        "7": BFBM_COLUMNS,
+    }
+    columns = mode_columns.get(str(mode).strip().lower(), mode_columns["3"])
+    return _custom_row_csv(row, columns)
+
+
 def _single_row_csv(row: dict[str, str]) -> str:
+    return _custom_row_csv(row, BFBM_COLUMNS)
+
+
+def _custom_row_csv(row: dict[str, str], columns: list[str]) -> str:
     buffer = io.StringIO(newline="")
-    writer = csv.DictWriter(buffer, fieldnames=BFBM_COLUMNS, extrasaction="ignore")
+    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
     writer.writeheader()
     writer.writerow(row)
     return buffer.getvalue()
