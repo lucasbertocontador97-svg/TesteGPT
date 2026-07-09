@@ -317,6 +317,7 @@ def fresh_match_odds_ids_csv(
     market_id: str,
     selection_id: str,
     start_time: str = "",
+    price: str = "",
 ) -> str:
     row = {
         "Provider": config.provider,
@@ -330,7 +331,7 @@ def fresh_match_odds_ids_csv(
         "MarketType": "MATCH_ODDS",
         "StartTime": start_time or _default_start_time(),
         "BetType": "BACK",
-        "Price": "0",
+        "Price": price or f"{config.min_price:.2f}",
         "Size": f"{config.stake:.2f}",
         "Points": "1",
         "MinPrice": f"{config.min_price:.2f}",
