@@ -196,7 +196,7 @@ class Storage:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def bfbm_tips(self, max_age_minutes: int) -> list[dict[str, Any]]:
+    def bfbm_tips(self, max_age_minutes: int, limit: int = 4) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
             select *
@@ -205,9 +205,9 @@ class Storage:
               and user_action != 'IGNORED'
               and created_at >= datetime('now', ?)
             order by id desc
-            limit 1
+            limit ?
             """,
-            (f"-{max_age_minutes} minutes",),
+            (f"-{max_age_minutes} minutes", max(1, limit)),
         ).fetchall()
         return [dict(row) for row in reversed(rows)]
 

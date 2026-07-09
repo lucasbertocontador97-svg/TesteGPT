@@ -53,6 +53,97 @@ def odds_alert_key(game: GameSnapshot, market_family: str, selection: str, line:
     return f"odds|{game.fixture_id or game.event_id}|{market_family}|{selection}|{line}"
 
 
+def _tc_int(match: dict, key: str, default: int = 0) -> int:
+    try:
+        return int(match.get(key) if match.get(key) is not None else default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _forced_live_decision(game: GameSnapshot) -> Decision:
+    corners = 0
+    shots = 0
+    shots_on = 0
+    for values in game.stats.values():
+        corners += _tc_int(values, "Corner Kicks")
+        shots += _tc_int(values, "Total Shots")
+        shots_on += _tc_int(values, "Shots on Goal")
+    current_goals = (game.score_home or 0) + (game.score_away or 0)
+
+    if game.minute is not None and 37 <= game.minute <= 85 and corners >= 1:
+        line = corners + 0.5
+        return Decision(
+            True,
+            95,
+            "Mais escanteios",
+            "over",
+            "Conferir manualmente",
+            0.0,
+            line,
+            f"TIP LIVE TESTE: jogo ao vivo real; linha forçada para validar feed. Escanteios {corners}, chutes {shots}, no gol {shots_on}.",
+            "baixa",
+            f"bfbm-live4|{game.event_id}|corners|{line:g}|{datetime.utcnow().strftime('%H%M%S')}",
+            market_status=totalcorner_market_status(game.totalcorner_match, "corners"),
+        )
+
+    line = max(0.5, current_goals + 0.5)
+    return Decision(
+        True,
+        90,
+        "Mais gols",
+        "over",
+        "Conferir manualmente",
+        0.0,
+        line,
+        f"TIP LIVE TESTE: jogo ao vivo real; linha forçada para validar feed. Gols {current_goals}, chutes {shots}, no gol {shots_on}.",
+        "baixa",
+        f"bfbm-live4|{game.event_id}|goals|{line:g}|{datetime.utcnow().strftime('%H%M%S')}",
+        market_status=totalcorner_market_status(game.totalcorner_match, "goals"),
+    )
+
+
+async def create_live_bfbm_tips(settings, count: int = 4) -> tuple[int, list[str]]:
+    http = HttpJsonClient()
+    storage = Storage(settings.database_path)
+    created: list[str] = []
+    try:
+        if not settings.totalcorner_token:
+            return 0, ["TOTALCORNER_TOKEN ausente."]
+        live = await TotalCornerClient(settings.totalcorner_token, http).today_inplay(max(settings.max_live_events, count * 3))
+        accepted = [
+            match
+            for match in live
+            if not is_blocked_match_type(str(match.get("l") or ""), str(match.get("h") or ""), str(match.get("a") or ""))
+        ]
+        for index, match in enumerate(accepted[:count]):
+            stats = compact_totalcorner_statistics(match)
+            home = str(match.get("h") or "?")
+            away = str(match.get("a") or "?")
+            game = GameSnapshot(
+                event_id=f"tc-live-{match.get('id') or match.get('mid') or index}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+                fixture_id=None,
+                league=str(match.get("l") or "TotalCorner Live"),
+                home=home,
+                away=away,
+                minute=_tc_int(match, "status", 75),
+                score_home=_tc_int(match, "hg"),
+                score_away=_tc_int(match, "ag"),
+                stats=stats,
+                markets=[],
+                totalcorner_match=match,
+            )
+            decision = _forced_live_decision(game)
+            alert_id = storage.save_manual_alert(game, decision)
+            if alert_id:
+                created.append(f"{home} v {away}")
+        if not created:
+            return 0, ["Nenhum jogo ao vivo aceito retornado pelo TotalCorner."]
+        return len(created), created
+    finally:
+        storage.close()
+        await http.close()
+
+
 class BfbmRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         settings = load_settings()
@@ -72,6 +163,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/debug-event.csv",
             "/bfbm/lab.csv",
             "/bfbm/create-test",
+            "/bfbm/create-live-4",
             "/health",
         }:
             self.send_error(404)
@@ -138,6 +230,27 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 storage.close()
             body = f"created={alert_id or ''}\nevent={home} v {away}\n".encode("utf-8")
             self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if parsed.path == "/bfbm/create-live-4":
+            try:
+                created_count, events = asyncio.run(create_live_bfbm_tips(settings, 4))
+                body_text = (
+                    f"created={created_count}\n"
+                    f"live_csv=/bfbm/live.csv?token={settings.bfbm_token or ''}\n"
+                    + "\n".join(f"- {event}" for event in events)
+                    + "\n"
+                )
+                body = body_text.encode("utf-8")
+                self.send_response(200)
+            except Exception as exc:
+                logger.exception("Erro ao criar tips live BFBM")
+                body = f"error={type(exc).__name__}\n".encode("utf-8")
+                self.send_response(500)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
