@@ -216,6 +216,18 @@ def fresh_test_csv(config: BfbmConfig, suffix: str) -> str:
     return _custom_row_csv(row, BFBM_ACCEPTED_COLUMNS)
 
 
+def fresh_event_csv(config: BfbmConfig, event_name: str) -> str:
+    row = {
+        "Provider": config.provider,
+        "SelectionName": "Over 2.5 Goals",
+        "MarketType": "OVER_UNDER_25",
+        "EventName": event_name,
+        "BetType": "BACK",
+        "Size": f"{config.stake:.2f}",
+    }
+    return _custom_row_csv(row, BFBM_ACCEPTED_COLUMNS)
+
+
 def _single_row_csv(row: dict[str, str]) -> str:
     return _custom_row_csv(row, BFBM_COLUMNS)
 
