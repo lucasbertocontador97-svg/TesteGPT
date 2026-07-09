@@ -422,8 +422,10 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     storage = Storage(settings.database_path)
     try:
         perf = storage.performance()
+        db_mode = "persistente" if settings.railway_volume_mount_path else "temporario"
         await update.message.reply_text(
             f"Status: online\n"
+            f"Banco: {db_mode}\n"
             f"Apostadas: {perf['actions'].get('BET', 0)}\n"
             f"Pendentes: {perf['actions'].get('PENDING', 0)}\n"
             f"Ignoradas: {perf['actions'].get('IGNORED', 0)}\n"

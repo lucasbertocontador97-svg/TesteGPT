@@ -11,6 +11,8 @@ from .models import Decision, GameSnapshot
 class Storage:
     def __init__(self, path: Path) -> None:
         self.path = path
+        if path.parent != Path("."):
+            path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self._init()
