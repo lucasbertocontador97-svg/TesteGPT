@@ -70,22 +70,6 @@ def _forced_live_decision(game: GameSnapshot) -> Decision:
         shots_on += _tc_int(values, "Shots on Goal")
     current_goals = (game.score_home or 0) + (game.score_away or 0)
 
-    if game.minute is not None and 37 <= game.minute <= 85 and corners >= 1:
-        line = corners + 0.5
-        return Decision(
-            True,
-            95,
-            "Mais escanteios",
-            "over",
-            "Conferir manualmente",
-            0.0,
-            line,
-            f"TIP LIVE TESTE: jogo ao vivo real; linha forçada para validar feed. Escanteios {corners}, chutes {shots}, no gol {shots_on}.",
-            "baixa",
-            f"bfbm-live4|{game.event_id}|corners|{line:g}|{datetime.utcnow().strftime('%H%M%S')}",
-            market_status=totalcorner_market_status(game.totalcorner_match, "corners"),
-        )
-
     line = max(0.5, current_goals + 0.5)
     return Decision(
         True,
@@ -95,7 +79,7 @@ def _forced_live_decision(game: GameSnapshot) -> Decision:
         "Conferir manualmente",
         0.0,
         line,
-        f"TIP LIVE TESTE: jogo ao vivo real; linha forçada para validar feed. Gols {current_goals}, chutes {shots}, no gol {shots_on}.",
+        f"TIP LIVE TESTE BFBM: jogo ao vivo real; usando mercado de gols para casar com os mercados carregados no BFBM. Gols {current_goals}, escanteios {corners}, chutes {shots}, no gol {shots_on}.",
         "baixa",
         f"bfbm-live4|{game.event_id}|goals|{line:g}|{datetime.utcnow().strftime('%H%M%S')}",
         market_status=totalcorner_market_status(game.totalcorner_match, "goals"),
