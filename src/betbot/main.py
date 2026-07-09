@@ -638,6 +638,47 @@ async def bfbm_test_tip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         storage.close()
 
 
+async def bfbm_test_simple_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    storage = Storage(settings.database_path)
+    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    try:
+        game = GameSnapshot(
+            event_id=f"bfbm-simple-{stamp}",
+            fixture_id=None,
+            league="BFBM TESTE SIMPLES",
+            home="",
+            away="",
+            minute=75,
+            score_home=1,
+            score_away=1,
+            stats={},
+            markets=[],
+        )
+        decision = Decision(
+            True,
+            99,
+            "Mais gols",
+            "over",
+            "BFBM TESTE",
+            0.0,
+            2.5,
+            "TIP DE TESTE SIMPLES BFBM: valida importacao CSV sem EventName.",
+            "teste",
+            f"bfbm-simple|{stamp}|over|2.5",
+        )
+        alert_id = storage.save_manual_alert(game, decision)
+        if alert_id is None:
+            await update.message.reply_text("Tip simples BFBM ja existe. Ela deve aparecer no CSV.")
+            return
+        await update.message.reply_text(
+            "Tip simples BFBM criada.\n\n"
+            "Ela vai sem EventName para testar se o BFBM importa o CSV pelo MarketType/SelectionName."
+        )
+    finally:
+        storage.close()
+
+
 async def force_live_alert_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
     http = HttpJsonClient()
@@ -1547,6 +1588,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("performance", performance_cmd))
     app.add_handler(CommandHandler("scan", scan_cmd))
     app.add_handler(CommandHandler("bfbm_test_tip", bfbm_test_tip_cmd))
+    app.add_handler(CommandHandler("bfbm_test_simple", bfbm_test_simple_cmd))
     app.add_handler(CommandHandler("force_live_alert", force_live_alert_cmd))
     app.add_handler(CommandHandler("force_home_win_test", with_timeout(force_home_win_test_cmd, 60, "/force_home_win_test")))
     app.add_handler(CommandHandler("test_analysis_no_odds", test_analysis_no_odds_cmd))

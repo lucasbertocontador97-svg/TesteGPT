@@ -93,7 +93,9 @@ def _tip_market(alert: dict[str, Any]) -> dict[str, str] | None:
 def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, str] | None:
     market = _tip_market(alert)
     event_name = _event_name(alert)
-    if not market or not event_name or not market.get("SelectionName"):
+    if str(alert.get("league", "")).upper() == "BFBM TESTE SIMPLES":
+        event_name = ""
+    if not market or not market.get("SelectionName"):
         return None
     price = _num(alert.get("odd")) or 0.0
     price_text = f"{price:.2f}" if price > 0 else ""
