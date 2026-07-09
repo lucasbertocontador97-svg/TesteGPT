@@ -204,6 +204,17 @@ def debug_lab_csv(config: BfbmConfig, event_name: str, mode: str) -> str:
     return _custom_row_csv(row, columns)
 
 
+def fresh_test_csv(config: BfbmConfig, suffix: str) -> str:
+    row = {
+        "Provider": config.provider,
+        "SelectionName": "Over 2.5 Goals",
+        "MarketType": "OVER_UNDER_25",
+        "EventName": f"TesteGPT v {suffix}",
+        "Size": f"{config.stake:.2f}",
+    }
+    return _custom_row_csv(row, BFBM_ACCEPTED_COLUMNS)
+
+
 def _single_row_csv(row: dict[str, str]) -> str:
     return _custom_row_csv(row, BFBM_COLUMNS)
 
