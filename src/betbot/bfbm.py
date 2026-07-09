@@ -285,9 +285,39 @@ def fresh_match_odds_full_csv(config: BfbmConfig, event_name: str, selection_nam
     row = {
         "Provider": config.provider,
         "Handicap": "0",
-        "SelectionId": "",
-        "MarketId": "",
-        "EventId": "",
+        "SelectionId": "0",
+        "MarketId": "0",
+        "EventId": "0",
+        "SelectionName": selection_name,
+        "MarketName": "Match Odds",
+        "EventName": event_name,
+        "MarketType": "MATCH_ODDS",
+        "StartTime": "",
+        "BetType": "BACK",
+        "Price": "0",
+        "Size": f"{config.stake:.2f}",
+        "Points": "1",
+        "MinPrice": f"{config.min_price:.2f}",
+        "MaxPrice": f"{config.max_price:.2f}",
+        "BSP": "False",
+    }
+    return _custom_row_csv(row, BFBM_COLUMNS)
+
+
+def fresh_match_odds_ids_csv(
+    config: BfbmConfig,
+    event_name: str,
+    selection_name: str,
+    event_id: str,
+    market_id: str,
+    selection_id: str,
+) -> str:
+    row = {
+        "Provider": config.provider,
+        "Handicap": "0",
+        "SelectionId": selection_id or "0",
+        "MarketId": market_id or "0",
+        "EventId": event_id or "0",
         "SelectionName": selection_name,
         "MarketName": "Match Odds",
         "EventName": event_name,
