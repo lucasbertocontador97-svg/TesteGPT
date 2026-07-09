@@ -318,14 +318,16 @@ def fresh_match_odds_ids_csv(
     selection_id: str,
     start_time: str = "",
     price: str = "",
+    selection_alias: str = "",
 ) -> str:
+    csv_selection_name = selection_alias or selection_name
     row = {
         "Provider": config.provider,
         "Handicap": "0",
         "SelectionId": selection_id or "0",
         "MarketId": market_id or "0",
         "EventId": event_id or "0",
-        "SelectionName": selection_name,
+        "SelectionName": csv_selection_name,
         "MarketName": "Match Odds",
         "EventName": event_name,
         "MarketType": "MATCH_ODDS",
