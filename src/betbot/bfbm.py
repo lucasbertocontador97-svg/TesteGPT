@@ -26,7 +26,7 @@ BFBM_COLUMNS = [
     "BSP",
 ]
 
-BFBM_ACCEPTED_COLUMNS = ["Provider", "SelectionName", "MarketType", "EventName", "Size"]
+BFBM_ACCEPTED_COLUMNS = ["Provider", "SelectionName", "MarketType", "EventName", "BetType", "Size"]
 
 
 @dataclass(frozen=True)
@@ -210,6 +210,7 @@ def fresh_test_csv(config: BfbmConfig, suffix: str) -> str:
         "SelectionName": "Over 2.5 Goals",
         "MarketType": "OVER_UNDER_25",
         "EventName": f"TesteGPT v {suffix}",
+        "BetType": "BACK",
         "Size": f"{config.stake:.2f}",
     }
     return _custom_row_csv(row, BFBM_ACCEPTED_COLUMNS)
