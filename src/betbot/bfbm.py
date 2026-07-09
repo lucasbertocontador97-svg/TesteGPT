@@ -18,15 +18,30 @@ BFBM_COLUMNS = [
     "MarketType",
     "StartTime",
     "BetType",
-    "Price",
     "Size",
     "Points",
+    "Price",
     "MinPrice",
     "MaxPrice",
     "BSP",
 ]
 
 BFBM_ACCEPTED_COLUMNS = ["Provider", "SelectionName", "MarketType", "EventName", "BetType", "Size"]
+BFBM_RICH_COLUMNS = [
+    "Provider",
+    "Handicap",
+    "SelectionName",
+    "MarketName",
+    "EventName",
+    "MarketType",
+    "BetType",
+    "Size",
+    "Points",
+    "Price",
+    "MinPrice",
+    "MaxPrice",
+    "BSP",
+]
 
 
 @dataclass(frozen=True)
@@ -148,6 +163,18 @@ def tips_full_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
     return buffer.getvalue()
 
 
+def tips_rich_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
+    buffer = io.StringIO(newline="")
+    rows = [row for alert in alerts if (row := alert_to_bfbm_row(alert, config))]
+    writer = csv.DictWriter(buffer, fieldnames=BFBM_RICH_COLUMNS, extrasaction="ignore", quoting=csv.QUOTE_ALL)
+    writer.writeheader()
+    for row in rows:
+        if not row.get("Price"):
+            row["Price"] = "0"
+        writer.writerow(row)
+    return buffer.getvalue()
+
+
 def debug_minimal_csv(config: BfbmConfig) -> str:
     buffer = io.StringIO(newline="")
     columns = ["Provider", "SelectionName", "MarketType", "BetType", "Size", "MinPrice", "MaxPrice"]
@@ -197,7 +224,7 @@ def debug_lab_csv(config: BfbmConfig, event_name: str, mode: str) -> str:
         "MarketType": "OVER_UNDER_25",
         "StartTime": "",
         "BetType": "BACK",
-        "Price": "",
+        "Price": "0",
         "Size": f"{config.stake:.2f}",
         "Points": "1",
         "MinPrice": f"{config.min_price:.2f}",
@@ -267,7 +294,7 @@ def fresh_match_odds_full_csv(config: BfbmConfig, event_name: str, selection_nam
         "MarketType": "MATCH_ODDS",
         "StartTime": "",
         "BetType": "BACK",
-        "Price": "",
+        "Price": "0",
         "Size": f"{config.stake:.2f}",
         "Points": "1",
         "MinPrice": f"{config.min_price:.2f}",
@@ -277,13 +304,33 @@ def fresh_match_odds_full_csv(config: BfbmConfig, event_name: str, selection_nam
     return _custom_row_csv(row, BFBM_COLUMNS)
 
 
+def fresh_match_odds_rich_csv(config: BfbmConfig, event_name: str, selection_name: str) -> str:
+    row = {
+        "Provider": config.provider,
+        "Handicap": "0",
+        "SelectionName": selection_name,
+        "MarketName": "Match Odds",
+        "EventName": event_name,
+        "MarketType": "MATCH_ODDS",
+        "BetType": "BACK",
+        "Size": f"{config.stake:.2f}",
+        "Points": "1",
+        "Price": "0",
+        "MinPrice": f"{config.min_price:.2f}",
+        "MaxPrice": f"{config.max_price:.2f}",
+        "BSP": "False",
+    }
+    return _custom_row_csv(row, BFBM_RICH_COLUMNS)
+
+
 def _single_row_csv(row: dict[str, str]) -> str:
     return _custom_row_csv(row, BFBM_COLUMNS)
 
 
 def _custom_row_csv(row: dict[str, str], columns: list[str]) -> str:
     buffer = io.StringIO(newline="")
-    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
+    quoting = csv.QUOTE_ALL if columns in (BFBM_COLUMNS, BFBM_RICH_COLUMNS) else csv.QUOTE_MINIMAL
+    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore", quoting=quoting)
     writer.writeheader()
     writer.writerow(row)
     return buffer.getvalue()
