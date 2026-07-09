@@ -45,6 +45,8 @@ class Settings:
     bfbm_min_price: float
     bfbm_max_price: float
     bfbm_max_tip_age_minutes: int
+    betfair_app_key: str | None
+    betfair_session_token: str | None
 
 
 def load_settings() -> Settings:
@@ -91,6 +93,8 @@ def load_settings() -> Settings:
         bfbm_min_price=float(os.getenv("BFBM_MIN_PRICE", "1.80")),
         bfbm_max_price=float(os.getenv("BFBM_MAX_PRICE", "8.00")),
         bfbm_max_tip_age_minutes=max(1, int(os.getenv("BFBM_MAX_TIP_AGE_MINUTES", "8"))),
+        betfair_app_key=os.getenv("BETFAIR_APP_KEY") or None,
+        betfair_session_token=os.getenv("BETFAIR_SESSION_TOKEN") or None,
     )
 
 
@@ -139,4 +143,6 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
         "GAME_COOLDOWN_MINUTES": bool(settings.game_cooldown_minutes),
         "BFBM_EXPORT": settings.bfbm_export,
         "BFBM_TOKEN": bool(settings.bfbm_token),
+        "BETFAIR_APP_KEY": bool(settings.betfair_app_key),
+        "BETFAIR_SESSION_TOKEN": bool(settings.betfair_session_token),
     }

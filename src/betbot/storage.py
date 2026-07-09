@@ -43,7 +43,11 @@ class Storage:
                 status text not null default 'SENT',
                 user_action text not null default 'PENDING',
                 result_note text,
-                settled_at datetime
+                settled_at datetime,
+                betfair_market_id text,
+                betfair_selection_id text,
+                betfair_event_id text,
+                betfair_start_time text
             );
             create index if not exists idx_alerts_status on alerts(status);
             """
@@ -51,6 +55,9 @@ class Storage:
         columns = {row["name"] for row in self.conn.execute("pragma table_info(alerts)").fetchall()}
         if "user_action" not in columns:
             self.conn.execute("alter table alerts add column user_action text not null default 'PENDING'")
+        for column in ("betfair_market_id", "betfair_selection_id", "betfair_event_id", "betfair_start_time"):
+            if column not in columns:
+                self.conn.execute(f"alter table alerts add column {column} text")
         self.conn.execute("create index if not exists idx_alerts_user_action on alerts(user_action)")
         self.conn.commit()
 
@@ -128,8 +135,9 @@ class Storage:
             """
             insert or ignore into alerts (
                 event_id, fixture_id, home, away, minute, market, selection, bookmaker,
-                odd, line, confidence, reason, stake, alert_key
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                odd, line, confidence, reason, stake, alert_key,
+                betfair_market_id, betfair_selection_id, betfair_event_id, betfair_start_time
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 game.event_id,
@@ -146,6 +154,10 @@ class Storage:
                 decision.reason,
                 decision.stake,
                 decision.alert_key,
+                decision.betfair_market_id,
+                decision.betfair_selection_id,
+                decision.betfair_event_id,
+                decision.betfair_start_time,
             ),
         )
         self.conn.commit()
@@ -156,8 +168,9 @@ class Storage:
             """
             insert or ignore into alerts (
                 event_id, fixture_id, home, away, minute, market, selection, bookmaker,
-                odd, line, confidence, reason, stake, alert_key
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                odd, line, confidence, reason, stake, alert_key,
+                betfair_market_id, betfair_selection_id, betfair_event_id, betfair_start_time
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 game.event_id,
@@ -174,6 +187,10 @@ class Storage:
                 decision.reason,
                 decision.stake,
                 decision.alert_key,
+                decision.betfair_market_id,
+                decision.betfair_selection_id,
+                decision.betfair_event_id,
+                decision.betfair_start_time,
             ),
         )
         self.conn.commit()

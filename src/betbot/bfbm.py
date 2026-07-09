@@ -27,6 +27,18 @@ BFBM_COLUMNS = [
 ]
 
 BFBM_ACCEPTED_COLUMNS = ["Provider", "SelectionName", "MarketType", "EventName", "BetType", "Size"]
+BFBM_BETFAIR_COLUMNS = [
+    "Provider",
+    "SelectionName",
+    "MarketType",
+    "EventName",
+    "BetType",
+    "Size",
+    "MarketId",
+    "SelectionId",
+    "EventId",
+    "StartTime",
+]
 
 
 @dataclass(frozen=True)
@@ -102,17 +114,17 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
     price = _num(alert.get("odd")) or 0.0
     price_text = f"{price:.2f}" if price > 0 else ""
     stake_text = f"{config.stake:.2f}"
-    return {
+    row = {
         "Provider": config.provider,
         "Handicap": "0",
         "SelectionId": "",
         "MarketId": "",
-        "EventId": "",
+        "EventId": str(alert.get("betfair_event_id") or ""),
         "SelectionName": market["SelectionName"],
         "MarketName": market["MarketName"],
         "EventName": event_name,
         "MarketType": market["MarketType"],
-        "StartTime": "",
+        "StartTime": str(alert.get("betfair_start_time") or ""),
         "BetType": "BACK",
         "Price": price_text,
         "Size": stake_text,
@@ -121,16 +133,19 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
         "MaxPrice": f"{config.max_price:.2f}",
         "BSP": "False",
     }
+    row["MarketId"] = str(alert.get("betfair_market_id") or "")
+    row["SelectionId"] = str(alert.get("betfair_selection_id") or "")
+    return row
 
 
 def tips_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
     buffer = io.StringIO(newline="")
-    writer = csv.DictWriter(buffer, fieldnames=BFBM_ACCEPTED_COLUMNS, extrasaction="ignore")
+    rows = [row for alert in alerts if (row := alert_to_bfbm_row(alert, config))]
+    columns = BFBM_BETFAIR_COLUMNS if any(row.get("MarketId") and row.get("SelectionId") for row in rows) else BFBM_ACCEPTED_COLUMNS
+    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
     writer.writeheader()
-    for alert in alerts:
-        row = alert_to_bfbm_row(alert, config)
-        if row:
-            writer.writerow(row)
+    for row in rows:
+        writer.writerow(row)
     return buffer.getvalue()
 
 

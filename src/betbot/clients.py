@@ -32,6 +32,60 @@ class HttpJsonClient:
             data = {"raw": response.text[:500]}
         return response.status_code, data
 
+    async def post_json(self, url: str, *, json: dict[str, Any], headers: dict[str, str] | None = None) -> Any:
+        response = await self._client.post(url, json=json, headers=headers)
+        response.raise_for_status()
+        return response.json()
+
+
+class BetfairClient:
+    base_url = "https://api.betfair.com/exchange/betting/json-rpc/v1"
+
+    def __init__(self, app_key: str, session_token: str, http: HttpJsonClient) -> None:
+        self.app_key = app_key
+        self.session_token = session_token
+        self.http = http
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {
+            "X-Application": self.app_key,
+            "X-Authentication": self.session_token,
+            "Content-Type": "application/json",
+        }
+
+    async def list_market_catalogue(
+        self,
+        *,
+        market_type_code: str,
+        text_query: str | None = None,
+        in_play_only: bool = True,
+        max_results: int = 100,
+    ) -> list[dict[str, Any]]:
+        market_filter: dict[str, Any] = {
+            "eventTypeIds": ["1"],
+            "marketTypeCodes": [market_type_code],
+            "inPlayOnly": in_play_only,
+        }
+        if text_query:
+            market_filter["textQuery"] = text_query
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "SportsAPING/v1.0/listMarketCatalogue",
+            "params": {
+                "filter": market_filter,
+                "maxResults": str(max_results),
+                "marketProjection": ["EVENT", "MARKET_START_TIME", "RUNNER_DESCRIPTION"],
+                "sort": "FIRST_TO_START",
+            },
+            "id": 1,
+        }
+        data = await self.http.post_json(self.base_url, json=payload, headers=self.headers)
+        if isinstance(data, dict) and "error" in data:
+            raise RuntimeError(f"Betfair API error: {data['error']}")
+        result = data.get("result", []) if isinstance(data, dict) else []
+        return result if isinstance(result, list) else []
+
 
 class OddsApiClient:
     base_url = "https://api.odds-api.io/v3"

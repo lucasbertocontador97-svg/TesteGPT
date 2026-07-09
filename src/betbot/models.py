@@ -52,6 +52,10 @@ class Decision:
     alert_key: str | None = None
     bookmaker_links: dict[str, str] = field(default_factory=dict)
     market_status: str | None = None
+    betfair_market_id: str | None = None
+    betfair_selection_id: str | None = None
+    betfair_event_id: str | None = None
+    betfair_start_time: str | None = None
 
 
 @dataclass(frozen=True)
