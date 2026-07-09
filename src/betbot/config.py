@@ -53,7 +53,7 @@ def load_settings() -> Settings:
     default_db_path = Path(volume_path) / "bot.sqlite3" if volume_path else Path("bot.sqlite3")
     db_path = Path(os.getenv("DATABASE_PATH", str(default_db_path)))
     railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN")
-    webhook_base_url = os.getenv("TELEGRAM_WEBHOOK_URL") or (f"https://{railway_domain}" if railway_domain else None)
+    webhook_base_url = os.getenv("TELEGRAM_WEBHOOK_URL")
     return Settings(
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
