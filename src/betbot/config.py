@@ -38,6 +38,13 @@ class Settings:
     odds_detail_limit: int
     hybrid_no_odds: bool
     game_cooldown_minutes: int
+    bfbm_export: bool
+    bfbm_provider: str
+    bfbm_token: str | None
+    bfbm_stake: float
+    bfbm_min_price: float
+    bfbm_max_price: float
+    bfbm_max_tip_age_minutes: int
 
 
 def load_settings() -> Settings:
@@ -77,6 +84,13 @@ def load_settings() -> Settings:
         odds_detail_limit=max(1, int(os.getenv("ODDS_DETAIL_LIMIT", "5"))),
         hybrid_no_odds=os.getenv("HYBRID_NO_ODDS", "true").lower() in {"1", "true", "yes", "sim"},
         game_cooldown_minutes=max(0, int(os.getenv("GAME_COOLDOWN_MINUTES", "30"))),
+        bfbm_export=os.getenv("BFBM_EXPORT", "false").lower() in {"1", "true", "yes", "sim"},
+        bfbm_provider=os.getenv("BFBM_PROVIDER", "TesteGPT"),
+        bfbm_token=os.getenv("BFBM_TOKEN") or None,
+        bfbm_stake=float(os.getenv("BFBM_STAKE", "0.58")),
+        bfbm_min_price=float(os.getenv("BFBM_MIN_PRICE", "1.80")),
+        bfbm_max_price=float(os.getenv("BFBM_MAX_PRICE", "8.00")),
+        bfbm_max_tip_age_minutes=max(1, int(os.getenv("BFBM_MAX_TIP_AGE_MINUTES", "8"))),
     )
 
 
@@ -123,4 +137,6 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
         "ODDS_USE_MULTI": settings.odds_use_multi,
         "HYBRID_NO_ODDS": settings.hybrid_no_odds,
         "GAME_COOLDOWN_MINUTES": bool(settings.game_cooldown_minutes),
+        "BFBM_EXPORT": settings.bfbm_export,
+        "BFBM_TOKEN": bool(settings.bfbm_token),
     }

@@ -189,6 +189,20 @@ class Storage:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def bfbm_tips(self, max_age_minutes: int) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            select *
+            from alerts
+            where status = 'SENT'
+              and user_action != 'IGNORED'
+              and created_at >= datetime('now', ?)
+            order by id asc
+            """,
+            (f"-{max_age_minutes} minutes",),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def set_user_action(self, alert_id: int, action: str) -> bool:
         action = action.upper()
         if action not in {"BET", "IGNORED"}:

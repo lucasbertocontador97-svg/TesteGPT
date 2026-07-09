@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import threading
 from datetime import date
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 from telegram import Update
@@ -11,6 +14,7 @@ from telegram.error import BadRequest, Conflict
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
+from .bfbm import BfbmConfig, tips_csv
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -47,6 +51,59 @@ def verified_alert_key(game: GameSnapshot, market_family: str, selection: str, l
 
 def odds_alert_key(game: GameSnapshot, market_family: str, selection: str, line: float | None) -> str:
     return f"odds|{game.fixture_id or game.event_id}|{market_family}|{selection}|{line}"
+
+
+class BfbmRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        settings = load_settings()
+        parsed = urlparse(self.path)
+        if parsed.path not in {"/bfbm/tips.csv", "/health"}:
+            self.send_error(404)
+            return
+        if parsed.path == "/health":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        if not settings.bfbm_export:
+            self.send_error(404, "BFBM export disabled")
+            return
+        token = parse_qs(parsed.query).get("token", [""])[0]
+        if settings.bfbm_token and token != settings.bfbm_token:
+            self.send_error(403)
+            return
+        storage = Storage(settings.database_path)
+        try:
+            alerts = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes)
+        finally:
+            storage.close()
+        body = tips_csv(
+            alerts,
+            BfbmConfig(
+                provider=settings.bfbm_provider,
+                stake=settings.bfbm_stake,
+                min_price=settings.bfbm_min_price,
+                max_price=settings.bfbm_max_price,
+            ),
+        ).encode("utf-8-sig")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        logger.info("BFBM HTTP: " + format, *args)
+
+
+def start_bfbm_server(settings) -> None:
+    if not settings.bfbm_export:
+        return
+    server = ThreadingHTTPServer(("0.0.0.0", settings.port), BfbmRequestHandler)
+    thread = threading.Thread(target=server.serve_forever, name="bfbm-http", daemon=True)
+    thread.start()
+    logger.info("BFBM CSV ativo em /bfbm/tips.csv na porta %s.", settings.port)
 
 
 async def load_sportmonks_live(settings, http: HttpJsonClient) -> list[dict]:
@@ -426,6 +483,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text(
             f"Status: online\n"
             f"Banco: {db_mode}\n"
+            f"BFBM: {'ativo' if settings.bfbm_export else 'inativo'}\n"
             f"Apostadas: {perf['actions'].get('BET', 0)}\n"
             f"Pendentes: {perf['actions'].get('PENDING', 0)}\n"
             f"Ignoradas: {perf['actions'].get('IGNORED', 0)}\n"
@@ -1427,6 +1485,9 @@ def run_bot() -> None:
     logger.info("Variaveis no startup: %s", settings_presence(settings))
     if settings.dry_run:
         logger.warning("DRY_RUN=true: o bot nao enviara mensagens. Use 'once' para testar a coleta.")
+    if settings.bfbm_export and settings.telegram_webhook_url:
+        raise RuntimeError("BFBM_EXPORT usa a porta HTTP; desative TELEGRAM_WEBHOOK_URL ou use polling.")
+    start_bfbm_server(settings)
 
     app = Application.builder().token(settings.telegram_bot_token).concurrent_updates(True).build()
     app.add_error_handler(error_handler)
