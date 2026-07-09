@@ -57,7 +57,14 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         settings = load_settings()
         parsed = urlparse(self.path)
-        if parsed.path not in {"/bfbm/tips.csv", "/bfbm/debug-minimal.csv", "/bfbm/debug-event.csv", "/bfbm/lab.csv", "/health"}:
+        if parsed.path not in {
+            "/bfbm/tips.csv",
+            "/bfbm/debug-minimal.csv",
+            "/bfbm/debug-event.csv",
+            "/bfbm/lab.csv",
+            "/bfbm/create-test",
+            "/health",
+        }:
             self.send_error(404)
             return
         if parsed.path == "/health":
@@ -71,6 +78,53 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         token = parse_qs(parsed.query).get("token", [""])[0]
         if settings.bfbm_token and token != settings.bfbm_token:
             self.send_error(403)
+            return
+        if parsed.path == "/bfbm/create-test":
+            query = parse_qs(parsed.query)
+            event_name = query.get("event", ["Flamengo v Botafogo"])[0].strip() or "Flamengo v Botafogo"
+            if " v " in event_name:
+                home, away = [part.strip() for part in event_name.split(" v ", 1)]
+            elif " vs " in event_name:
+                home, away = [part.strip() for part in event_name.split(" vs ", 1)]
+            else:
+                home, away = event_name, "BFBM Test"
+            stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            storage = Storage(settings.database_path)
+            try:
+                game = GameSnapshot(
+                    event_id=f"bfbm-http-test-{stamp}",
+                    fixture_id=None,
+                    league="BFBM TESTE",
+                    home=home,
+                    away=away,
+                    minute=75,
+                    score_home=1,
+                    score_away=1,
+                    stats={},
+                    markets=[],
+                )
+                decision = Decision(
+                    True,
+                    99,
+                    "Mais gols",
+                    "over",
+                    "BFBM TESTE",
+                    0.0,
+                    2.5,
+                    "TIP DE TESTE BFBM: valida importacao oficial com stake.",
+                    "teste",
+                    f"bfbm-http-test|{stamp}|over|2.5",
+                )
+                alert_id = storage.save_manual_alert(game, decision)
+            finally:
+                storage.close()
+            body = f"created={alert_id or ''}\nevent={home} v {away}\n".encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         config = BfbmConfig(
             provider=settings.bfbm_provider,
