@@ -8,19 +8,22 @@ from typing import Any
 
 BFBM_COLUMNS = [
     "Provider",
+    "Handicap",
+    "SelectionId",
+    "MarketId",
+    "EventId",
+    "SelectionName",
+    "MarketName",
     "EventName",
     "MarketType",
-    "MarketName",
-    "SelectionName",
+    "StartTime",
     "BetType",
-    "MinPrice",
-    "MaxPrice",
     "Price",
     "Size",
-    "Stake",
     "Points",
-    "StartTime",
-    "TipId",
+    "MinPrice",
+    "MaxPrice",
+    "BSP",
 ]
 
 
@@ -97,19 +100,22 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
     stake_text = f"{config.stake:.2f}"
     return {
         "Provider": config.provider,
+        "Handicap": "0",
+        "SelectionId": "",
+        "MarketId": "",
+        "EventId": "",
+        "SelectionName": market["SelectionName"],
+        "MarketName": market["MarketName"],
         "EventName": event_name,
         "MarketType": market["MarketType"],
-        "MarketName": market["MarketName"],
-        "SelectionName": market["SelectionName"],
+        "StartTime": "",
         "BetType": "BACK",
-        "MinPrice": f"{config.min_price:.2f}",
-        "MaxPrice": f"{config.max_price:.2f}",
         "Price": price_text,
         "Size": stake_text,
-        "Stake": stake_text,
         "Points": "1",
-        "StartTime": "",
-        "TipId": f"betbot-{alert.get('id')}",
+        "MinPrice": f"{config.min_price:.2f}",
+        "MaxPrice": f"{config.max_price:.2f}",
+        "BSP": "False",
     }
 
 

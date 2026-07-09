@@ -593,13 +593,20 @@ async def bfbm_test_tip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     settings = load_settings()
     storage = Storage(settings.database_path)
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    event_name = " ".join(context.args).strip() if context.args else "Flamengo v Palmeiras"
+    if " v " in event_name:
+        home, away = [part.strip() for part in event_name.split(" v ", 1)]
+    elif " vs " in event_name:
+        home, away = [part.strip() for part in event_name.split(" vs ", 1)]
+    else:
+        home, away = event_name, "BFBM Test"
     try:
         game = GameSnapshot(
             event_id=f"bfbm-test-{stamp}",
             fixture_id=None,
             league="BFBM TESTE",
-            home="Flamengo",
-            away="Palmeiras",
+            home=home,
+            away=away,
             minute=75,
             score_home=1,
             score_away=1,
@@ -624,6 +631,7 @@ async def bfbm_test_tip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return
         await update.message.reply_text(
             "Tip de teste BFBM criada.\n\n"
+            f"Evento no CSV: {home} v {away}\n"
             "Agora mande o BFBM importar a URL novamente. Ela expira conforme BFBM_MAX_TIP_AGE_MINUTES."
         )
     finally:
