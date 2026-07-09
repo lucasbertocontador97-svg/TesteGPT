@@ -14,7 +14,7 @@ from telegram.error import BadRequest, Conflict
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
-from .bfbm import BfbmConfig, debug_minimal_csv, tips_csv
+from .bfbm import BfbmConfig, debug_event_csv, debug_minimal_csv, tips_csv
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -57,7 +57,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         settings = load_settings()
         parsed = urlparse(self.path)
-        if parsed.path not in {"/bfbm/tips.csv", "/bfbm/debug-minimal.csv", "/health"}:
+        if parsed.path not in {"/bfbm/tips.csv", "/bfbm/debug-minimal.csv", "/bfbm/debug-event.csv", "/health"}:
             self.send_error(404)
             return
         if parsed.path == "/health":
@@ -80,6 +80,9 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         )
         if parsed.path == "/bfbm/debug-minimal.csv":
             body = debug_minimal_csv(config).encode("utf-8-sig")
+        elif parsed.path == "/bfbm/debug-event.csv":
+            event_name = parse_qs(parsed.query).get("event", ["TesteGPT Debug Match"])[0].strip()
+            body = debug_event_csv(config, event_name or "TesteGPT Debug Match").encode("utf-8-sig")
         else:
             storage = Storage(settings.database_path)
             try:

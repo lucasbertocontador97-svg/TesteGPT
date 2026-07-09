@@ -149,3 +149,28 @@ def debug_minimal_csv(config: BfbmConfig) -> str:
         }
     )
     return buffer.getvalue()
+
+
+def debug_event_csv(config: BfbmConfig, event_name: str) -> str:
+    alert = {
+        "id": "debug-event",
+        "event_id": "debug-event",
+        "home": event_name,
+        "away": "",
+        "market": "Mais gols",
+        "selection": "over",
+        "line": 2.5,
+        "odd": 0,
+    }
+    row = alert_to_bfbm_row(alert, config)
+    if row:
+        row["EventName"] = event_name
+    return tips_csv([alert], config) if not row else _single_row_csv(row)
+
+
+def _single_row_csv(row: dict[str, str]) -> str:
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=BFBM_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerow(row)
+    return buffer.getvalue()
