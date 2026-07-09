@@ -26,7 +26,7 @@ BFBM_COLUMNS = [
     "BSP",
 ]
 
-BFBM_ACCEPTED_COLUMNS = ["Provider", "SelectionName", "MarketType", "EventName"]
+BFBM_ACCEPTED_COLUMNS = ["Provider", "SelectionName", "MarketType", "EventName", "Size"]
 
 
 @dataclass(frozen=True)
