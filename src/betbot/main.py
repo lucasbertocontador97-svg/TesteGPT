@@ -129,13 +129,13 @@ def _first_totalcorner_line(match: dict, keys: tuple[str, ...]) -> tuple[str, st
 
 def totalcorner_market_status(match: dict, market_family: str) -> str:
     if not match:
-        return "⚠️ Mercado não confirmado: sem match correspondente na TotalCorner. Conferir se a casa abriu esse jogo."
+        return "⚠️ Bet365/Betano não confirmadas: sem odds/link e sem match correspondente na TotalCorner."
     if market_family == "goals":
         found = _first_totalcorner_line(match, ("i_goal", "goalLine", "i_goal_h", "goalLineHalf"))
         if found:
             _, line = found
-            return f"✅ Mercado live detectado na TotalCorner: linha de gols {line}."
-        return "⚠️ Mercado não confirmado: TotalCorner não trouxe linha live de gols para esse jogo."
+            return f"⚠️ Bet365/Betano não confirmadas. TotalCorner mostra linha live de gols {line}, mas confira se a casa abriu esse jogo."
+        return "⚠️ Bet365/Betano não confirmadas: TotalCorner também não trouxe linha live de gols."
     if market_family == "corners":
         found = _first_totalcorner_line(
             match,
@@ -143,9 +143,9 @@ def totalcorner_market_status(match: dict, market_family: str) -> str:
         )
         if found:
             _, line = found
-            return f"✅ Mercado live detectado na TotalCorner: linha de escanteios {line}."
-        return "⚠️ Mercado não confirmado: TotalCorner não trouxe linha live de escanteios para esse jogo."
-    return "⚠️ Mercado não confirmado pela TotalCorner. Conferir manualmente antes de entrar."
+            return f"⚠️ Bet365/Betano não confirmadas. TotalCorner mostra linha live de escanteios {line}, mas confira se a casa abriu esse jogo."
+        return "⚠️ Bet365/Betano não confirmadas: TotalCorner também não trouxe linha live de escanteios."
+    return "⚠️ Bet365/Betano não confirmadas: conferir manualmente antes de entrar."
 
 
 async def fixture_stats_with_sportmonks_fallback(
