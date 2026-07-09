@@ -26,6 +26,8 @@ BFBM_COLUMNS = [
     "BSP",
 ]
 
+BFBM_ACCEPTED_COLUMNS = ["Provider", "SelectionName", "MarketType", "EventName"]
+
 
 @dataclass(frozen=True)
 class BfbmConfig:
@@ -123,7 +125,7 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
 
 def tips_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
     buffer = io.StringIO(newline="")
-    writer = csv.DictWriter(buffer, fieldnames=BFBM_COLUMNS, extrasaction="ignore")
+    writer = csv.DictWriter(buffer, fieldnames=BFBM_ACCEPTED_COLUMNS, extrasaction="ignore")
     writer.writeheader()
     for alert in alerts:
         row = alert_to_bfbm_row(alert, config)
@@ -196,6 +198,7 @@ def debug_lab_csv(config: BfbmConfig, event_name: str, mode: str) -> str:
         "5": ["Provider", "SelectionName", "MarketName", "MarketType", "EventName", "BetType", "Size"],
         "6": ["Provider", "SelectionName", "MarketName", "MarketType", "EventName", "BetType", "Size", "MinPrice", "MaxPrice"],
         "7": BFBM_COLUMNS,
+        "8": ["Provider", "SelectionName", "MarketType", "EventName", "Size"],
     }
     columns = mode_columns.get(str(mode).strip().lower(), mode_columns["3"])
     return _custom_row_csv(row, columns)
