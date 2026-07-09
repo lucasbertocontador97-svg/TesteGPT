@@ -102,8 +102,12 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
     price = _num(alert.get("odd")) or 0.0
     price_text = f"{price:.2f}" if price > 0 else ""
     stake_text = f"{config.stake:.2f}"
+    provider = config.provider
+    alert_id = str(alert.get("id") or "").strip()
+    if alert_id:
+        provider = f"{config.provider}-{alert_id}"
     return {
-        "Provider": config.provider,
+        "Provider": provider,
         "Handicap": "0",
         "SelectionId": "",
         "MarketId": "",
