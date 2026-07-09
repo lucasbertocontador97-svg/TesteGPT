@@ -96,6 +96,8 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 home, away = [part.strip() for part in event_name.split(" v ", 1)]
             elif " vs " in event_name:
                 home, away = [part.strip() for part in event_name.split(" vs ", 1)]
+            elif " x " in event_name:
+                home, away = event_name, ""
             else:
                 home, away = event_name, "BFBM Test"
             stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
@@ -677,6 +679,8 @@ async def bfbm_test_tip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         home, away = [part.strip() for part in event_name.split(" v ", 1)]
     elif " vs " in event_name:
         home, away = [part.strip() for part in event_name.split(" vs ", 1)]
+    elif " x " in event_name:
+        home, away = event_name, ""
     else:
         home, away = event_name, "BFBM Test"
     try:

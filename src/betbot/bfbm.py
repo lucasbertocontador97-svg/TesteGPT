@@ -49,7 +49,11 @@ def _line_text(line: float) -> str:
 
 
 def _event_name(alert: dict[str, Any]) -> str:
-    return f"{alert.get('home', '')} v {alert.get('away', '')}".strip()
+    home = str(alert.get("home", "") or "").strip()
+    away = str(alert.get("away", "") or "").strip()
+    if home and away:
+        return f"{home} v {away}"
+    return home or away
 
 
 def _goal_tip(alert: dict[str, Any]) -> dict[str, str] | None:
