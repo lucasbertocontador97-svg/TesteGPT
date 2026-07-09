@@ -232,6 +232,18 @@ def fresh_event_csv(config: BfbmConfig, event_name: str) -> str:
     return _custom_row_csv(row, BFBM_ACCEPTED_COLUMNS)
 
 
+def fresh_match_odds_csv(config: BfbmConfig, event_name: str, selection_name: str) -> str:
+    row = {
+        "Provider": config.provider,
+        "SelectionName": selection_name,
+        "MarketType": "MATCH_ODDS",
+        "EventName": event_name,
+        "BetType": "BACK",
+        "Size": f"{config.stake:.2f}",
+    }
+    return _custom_row_csv(row, BFBM_ACCEPTED_COLUMNS)
+
+
 def _single_row_csv(row: dict[str, str]) -> str:
     return _custom_row_csv(row, BFBM_COLUMNS)
 

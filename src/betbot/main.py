@@ -14,7 +14,7 @@ from telegram.error import BadRequest, Conflict
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
-from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_test_csv, tips_csv
+from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_test_csv, tips_csv
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -62,6 +62,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/live.csv",
             "/bfbm/fresh.csv",
             "/bfbm/fresh-event.csv",
+            "/bfbm/fresh-match.csv",
             "/bfbm/debug-minimal.csv",
             "/bfbm/debug-event.csv",
             "/bfbm/lab.csv",
@@ -160,6 +161,15 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/bfbm/fresh-event.csv":
             event_name = parse_qs(parsed.query).get("event", ["SV Wehen v FC 08 Homburg"])[0].strip()
             body = fresh_event_csv(config, event_name or "SV Wehen v FC 08 Homburg").encode("utf-8-sig")
+        elif parsed.path == "/bfbm/fresh-match.csv":
+            query = parse_qs(parsed.query)
+            event_name = query.get("event", ["Atletic Club Escaldes x FK Mornar"])[0].strip()
+            selection_name = query.get("selection", ["FK Mornar"])[0].strip()
+            body = fresh_match_odds_csv(
+                config,
+                event_name or "Atletic Club Escaldes x FK Mornar",
+                selection_name or "FK Mornar",
+            ).encode("utf-8-sig")
         else:
             storage = Storage(settings.database_path)
             try:
