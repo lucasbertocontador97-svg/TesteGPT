@@ -311,6 +311,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 query.get("start_time", [""])[0].strip(),
                 query.get("price", [""])[0].strip(),
                 query.get("selection_alias", [""])[0].strip(),
+                query.get("market_name", [""])[0].strip(),
             ).encode("utf-8-sig")
         elif parsed.path == "/bfbm/fresh-match-rich.csv":
             query = parse_qs(parsed.query)

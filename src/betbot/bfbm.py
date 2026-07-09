@@ -64,6 +64,10 @@ def _line_text(line: float) -> str:
     return f"{line:g}"
 
 
+def _bfbm_line_text(line: float) -> str:
+    return _line_text(line).replace(".", ",")
+
+
 def _event_name(alert: dict[str, Any]) -> str:
     home = str(alert.get("home", "") or "").strip()
     away = str(alert.get("away", "") or "").strip()
@@ -84,12 +88,12 @@ def _goal_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     market_type = supported.get(line)
     if not market_type:
         return None
-    side = "Over" if str(alert.get("selection", "")).lower() == "over" else "Under"
-    line_label = _line_text(line)
+    side = "Mais" if str(alert.get("selection", "")).lower() == "over" else "Menos"
+    display_line = _bfbm_line_text(line)
     return {
         "MarketType": market_type,
-        "MarketName": f"Over/Under {line_label} Goals",
-        "SelectionName": f"{side} {line_label} Goals",
+        "MarketName": f"Mais/Menos de {display_line} Gols",
+        "SelectionName": f"{side} de {display_line} Gols",
     }
 
 
@@ -97,13 +101,14 @@ def _corner_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     line = _num(alert.get("line"))
     if line is None:
         return None
-    side = "Over" if str(alert.get("selection", "")).lower() == "over" else "Under"
+    side = "Mais" if str(alert.get("selection", "")).lower() == "over" else "Menos"
     line_label = _line_text(line)
+    display_line = _bfbm_line_text(line)
     market_code = str(int(round(line * 10))).zfill(2)
     return {
         "MarketType": f"OVER_UNDER_{market_code}_CORNERS",
-        "MarketName": f"Over/Under {line_label} Corners",
-        "SelectionName": f"{side} {line_label} Corners",
+        "MarketName": f"Mais/Menos de {display_line} Escanteios",
+        "SelectionName": f"{side} de {display_line} Escanteios",
     }
 
 
@@ -319,6 +324,7 @@ def fresh_match_odds_ids_csv(
     start_time: str = "",
     price: str = "",
     selection_alias: str = "",
+    market_name: str = "",
 ) -> str:
     csv_selection_name = selection_alias or selection_name
     row = {
@@ -328,7 +334,7 @@ def fresh_match_odds_ids_csv(
         "MarketId": market_id or "0",
         "EventId": event_id or "0",
         "SelectionName": csv_selection_name,
-        "MarketName": "Match Odds",
+        "MarketName": market_name or "Match Odds",
         "EventName": event_name,
         "MarketType": "MATCH_ODDS",
         "StartTime": start_time or _default_start_time(),
