@@ -59,6 +59,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path not in {
             "/bfbm/tips.csv",
+            "/bfbm/live.csv",
             "/bfbm/debug-minimal.csv",
             "/bfbm/debug-event.csv",
             "/bfbm/lab.csv",
