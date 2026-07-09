@@ -82,6 +82,13 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/bfbm/create-test":
             query = parse_qs(parsed.query)
             event_name = query.get("event", ["Flamengo v Botafogo"])[0].strip() or "Flamengo v Botafogo"
+            selection = query.get("selection", ["over"])[0].strip().lower()
+            if selection not in {"over", "under"}:
+                selection = "over"
+            try:
+                line = float(query.get("line", ["2.5"])[0])
+            except ValueError:
+                line = 2.5
             if " v " in event_name:
                 home, away = [part.strip() for part in event_name.split(" v ", 1)]
             elif " vs " in event_name:
@@ -107,13 +114,13 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                     True,
                     99,
                     "Mais gols",
-                    "over",
+                    selection,
                     "BFBM TESTE",
                     0.0,
-                    2.5,
+                    line,
                     "TIP DE TESTE BFBM: valida importacao oficial com stake.",
                     "teste",
-                    f"bfbm-http-test|{stamp}|over|2.5",
+                    f"bfbm-http-test|{stamp}|{selection}|{line:g}",
                 )
                 alert_id = storage.save_manual_alert(game, decision)
             finally:

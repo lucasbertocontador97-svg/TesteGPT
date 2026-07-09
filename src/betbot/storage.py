@@ -197,11 +197,12 @@ class Storage:
             where status = 'SENT'
               and user_action != 'IGNORED'
               and created_at >= datetime('now', ?)
-            order by id asc
+            order by id desc
+            limit 1
             """,
             (f"-{max_age_minutes} minutes",),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [dict(row) for row in reversed(rows)]
 
     def set_user_action(self, alert_id: int, action: str) -> bool:
         action = action.upper()
