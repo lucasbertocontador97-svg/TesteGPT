@@ -43,6 +43,7 @@ def format_alert(game: GameSnapshot, decision: Decision) -> str:
     odd_text = f"{decision.odd:.2f}" if decision.odd > 0 else "sem cotacao live"
     bookmaker_text = decision.bookmaker if decision.odd > 0 else "conferir manualmente"
     reason = _short_reason(decision.reason)
+    market_status = f"\n{decision.market_status}" if decision.market_status else ""
     return (
         "\u2705 ENTRADA APROVADA\n"
         f"\U0001f534 {minute} | {score}\n\n"
@@ -50,7 +51,7 @@ def format_alert(game: GameSnapshot, decision: Decision) -> str:
         f"\U0001f3c6 {game.league or '-'}\n\n"
         f"\U0001f4ca {market_text}\n"
         f"\U0001f3e6 Odd: {odd_text}\n"
-        f"\U0001f3e0 Casa: {bookmaker_text}\n"
+        f"\U0001f3e0 Casa: {bookmaker_text}{market_status}\n"
         f"\U0001f4c8 Score: {decision.confidence}/100 | Stake: {decision.stake}\n\n"
         f"\U0001f9e0 {reason}"
     )

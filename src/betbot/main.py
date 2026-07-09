@@ -117,6 +117,37 @@ def make_totalcorner_client(settings, http: HttpJsonClient) -> TotalCornerClient
     return TotalCornerClient(settings.totalcorner_token, http)
 
 
+def _first_totalcorner_line(match: dict, keys: tuple[str, ...]) -> tuple[str, str] | None:
+    for key in keys:
+        value = match.get(key)
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if item not in (None, "", []):
+                return key, str(item)
+    return None
+
+
+def totalcorner_market_status(match: dict, market_family: str) -> str:
+    if not match:
+        return "⚠️ Mercado não confirmado: sem match correspondente na TotalCorner. Conferir se a casa abriu esse jogo."
+    if market_family == "goals":
+        found = _first_totalcorner_line(match, ("i_goal", "goalLine", "i_goal_h", "goalLineHalf"))
+        if found:
+            _, line = found
+            return f"✅ Mercado live detectado na TotalCorner: linha de gols {line}."
+        return "⚠️ Mercado não confirmado: TotalCorner não trouxe linha live de gols para esse jogo."
+    if market_family == "corners":
+        found = _first_totalcorner_line(
+            match,
+            ("i_corner", "cornerLine", "asian_corner", "asianCorner", "i_corner_h", "cornerLineHalf"),
+        )
+        if found:
+            _, line = found
+            return f"✅ Mercado live detectado na TotalCorner: linha de escanteios {line}."
+        return "⚠️ Mercado não confirmado: TotalCorner não trouxe linha live de escanteios para esse jogo."
+    return "⚠️ Mercado não confirmado pela TotalCorner. Conferir manualmente antes de entrar."
+
+
 async def fixture_stats_with_sportmonks_fallback(
     fixture: dict,
     api_football: ApiFootballClient,
@@ -193,6 +224,7 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
     for fixture, event in fixture_event_pairs:
         event_id = str(event.get("id") or "") if event else ""
         fixture_id = fixture.get("fixture", {}).get("id") if fixture else None
+        totalcorner_match = find_matching_totalcorner_match(fixture, totalcorner_live or []) if totalcorner_live else None
         stats = await fixture_stats_with_sportmonks_fallback(
             fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
         )
@@ -214,6 +246,7 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
                 score_away=score_away,
                 stats=stats,
                 markets=[],
+                totalcorner_match=totalcorner_match or {},
             )
         )
     return snapshots
@@ -308,6 +341,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     target_reason,
                     target_stake,
                     alert_key,
+                    market_status=totalcorner_market_status(game.totalcorner_match, target_family),
                 )
             else:
                 chosen = sorted(compatible, key=lambda market: market.odd, reverse=True)[0]

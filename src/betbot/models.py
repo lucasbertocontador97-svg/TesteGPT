@@ -35,6 +35,7 @@ class GameSnapshot:
     score_away: int | None
     stats: dict[str, Any]
     markets: list[MarketOption]
+    totalcorner_match: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ class Decision:
     stake: str
     alert_key: str | None = None
     bookmaker_links: dict[str, str] = field(default_factory=dict)
+    market_status: str | None = None
 
 
 @dataclass(frozen=True)
