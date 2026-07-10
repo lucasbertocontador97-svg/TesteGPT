@@ -106,6 +106,8 @@ def _default_start_time() -> str:
 
 def _id_or_zero(value: Any) -> str:
     text = str(value or "").strip()
+    if not text.isdigit():
+        return "0"
     return text if text else "0"
 
 
@@ -127,6 +129,11 @@ def _bfbm_clean_name(value: str) -> str:
     cleaned = value
     for source, target in aliases.items():
         cleaned = cleaned.replace(source, target)
+    cleaned = cleaned.strip()
+    if cleaned.casefold().startswith("fc "):
+        cleaned = cleaned[3:].strip()
+    if cleaned.casefold().endswith(" fc"):
+        cleaned = cleaned[:-3].strip()
     return cleaned
 
 
@@ -202,7 +209,7 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
         "Handicap": "0",
         "SelectionId": _id_or_zero(alert.get("selection_id") or alert.get("SelectionId")),
         "MarketId": _id_or_zero(alert.get("market_id") or alert.get("MarketId")),
-        "EventId": _id_or_zero(alert.get("betfair_event_id") or alert.get("event_id") or alert.get("EventId")),
+        "EventId": _id_or_zero(alert.get("betfair_event_id") or alert.get("EventId")),
         "SelectionName": market["SelectionName"],
         "MarketName": market["MarketName"],
         "EventName": event_name,

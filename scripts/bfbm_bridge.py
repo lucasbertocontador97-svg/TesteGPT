@@ -90,6 +90,10 @@ def _normalize_name(value: str) -> str:
     cleaned = str(value or "").strip()
     for source, target in aliases.items():
         cleaned = cleaned.replace(source, target)
+    if cleaned.casefold().startswith("fc "):
+        cleaned = cleaned[3:].strip()
+    if cleaned.casefold().endswith(" fc"):
+        cleaned = cleaned[:-3].strip()
     return cleaned
 
 
@@ -145,7 +149,7 @@ def _value_from(row: dict[str, Any], *names: str) -> str:
 
 def _id_value_from(row: dict[str, Any], *names: str) -> str:
     value = _value_from(row, *names)
-    return value if value else "0"
+    return value if value.isdigit() else "0"
 
 
 def _start_time_value_from(row: dict[str, Any], *names: str) -> str:
@@ -170,18 +174,14 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
     return {
         "Provider": str(row.get("Provider") or row.get("provider") or "TesteGPT").strip(),
         "Handicap": str(row.get("Handicap") or row.get("handicap") or "0").strip(),
-        "SelectionId": _value_from(row, "SelectionId", "selection_id", "ID da seleção", "ID da selecao"),
-        "MarketId": _value_from(row, "MarketId", "market_id", "ID do mercado"),
-        "EventId": _value_from(row, "EventId", "event_id", "ID do Evento"),
         "SelectionName": selection,
-        "SelectionId": _id_value_from(row, "SelectionId", "selection_id", "ID da seleção", "ID da selecao", "ID da seleÃ§Ã£o"),
+        "SelectionId": _id_value_from(row, "SelectionId", "selection_id", "ID da selecao"),
         "MarketId": _id_value_from(row, "MarketId", "market_id", "ID do mercado"),
         "EventId": _id_value_from(row, "EventId", "event_id", "ID do Evento"),
         "MarketName": market_name,
         "EventName": event,
         "MarketType": market_type,
-        "StartTime": _value_from(row, "StartTime", "start_time", "Hora de início", "Hora de inicio"),
-        "StartTime": _start_time_value_from(row, "StartTime", "start_time", "Hora de início", "Hora de inicio", "Hora de inÃ­cio"),
+        "StartTime": _start_time_value_from(row, "StartTime", "start_time", "Hora de inicio"),
         "BetType": str(row.get("BetType") or row.get("bet_type") or "BACK").upper(),
         "Size": str(row.get("Size") or row.get("stake") or row.get("size") or "1.00").strip(),
         "Points": str(row.get("Points") or row.get("points") or "1").strip(),
