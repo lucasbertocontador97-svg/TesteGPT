@@ -16,7 +16,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
 from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
-from .bfbm_markets import payload_to_markets
+from .bfbm_markets import _event_score, market_family, payload_to_markets
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -129,6 +129,99 @@ async def create_live_bfbm_tips(settings, count: int = 4) -> tuple[int, list[str
         await http.close()
 
 
+def _tc_event_label(match: dict) -> str:
+    home = str(match.get("h") or "?").strip()
+    away = str(match.get("a") or "?").strip()
+    return f"{home} x {away}"
+
+
+def _tc_score_label(match: dict) -> str:
+    return f"{_tc_int(match, 'hg')}x{_tc_int(match, 'ag')}"
+
+
+async def bfbm_totalcorner_overlap(settings) -> dict:
+    storage = Storage(settings.database_path)
+    try:
+        catalog_rows = storage.bfbm_markets(15)
+    finally:
+        storage.close()
+
+    http = HttpJsonClient()
+    try:
+        live = await TotalCornerClient(settings.totalcorner_token, http).today_inplay(settings.max_live_events) if settings.totalcorner_token else []
+    finally:
+        await http.close()
+
+    accepted: list[dict] = []
+    blocked: list[dict] = []
+    for match in live:
+        if is_blocked_match_type(str(match.get("l") or ""), str(match.get("h") or ""), str(match.get("a") or "")):
+            blocked.append(match)
+        else:
+            accepted.append(match)
+
+    active_catalog = [
+        row
+        for row in catalog_rows
+        if "closed" not in str(row.get("status") or "").casefold()
+        and "fechado" not in str(row.get("status") or "").casefold()
+    ]
+
+    matched: list[dict] = []
+    unmatched: list[dict] = []
+    for match in accepted:
+        event_label = _tc_event_label(match)
+        scored_rows: list[tuple[int, dict]] = []
+        seen_markets: set[str] = set()
+        for row in active_catalog:
+            score = _event_score(event_label, str(row.get("event_name") or ""))
+            if score < 55:
+                continue
+            market_name = str(row.get("market_name") or "")
+            key = f"{row.get('event_id') or ''}|{row.get('market_id') or ''}|{market_name}"
+            if key in seen_markets:
+                continue
+            seen_markets.add(key)
+            scored_rows.append((score, row))
+        scored_rows.sort(key=lambda item: item[0], reverse=True)
+        markets = [
+            {
+                "event": row.get("event_name") or "",
+                "market": row.get("market_name") or "",
+                "family": market_family(str(row.get("market_name") or "")),
+                "event_id": row.get("event_id") or "",
+                "market_id": row.get("market_id") or "",
+                "status": row.get("status") or "",
+                "score": score,
+            }
+            for score, row in scored_rows[:12]
+        ]
+        item = {
+            "totalcorner_event": event_label,
+            "league": str(match.get("l") or ""),
+            "minute": _tc_int(match, "status"),
+            "score": _tc_score_label(match),
+            "bfbm_markets_count": len(scored_rows),
+            "bfbm_markets": markets,
+        }
+        if scored_rows:
+            matched.append(item)
+        else:
+            unmatched.append(item)
+
+    return {
+        "totalcorner_live": len(live),
+        "totalcorner_accepted": len(accepted),
+        "totalcorner_blocked": len(blocked),
+        "bfbm_markets": len(catalog_rows),
+        "bfbm_active_markets": len(active_catalog),
+        "matched_games": len(matched),
+        "unmatched_games": len(unmatched),
+        "matched": matched[:30],
+        "unmatched": unmatched[:30],
+    }
+
+
 class BfbmRequestHandler(BaseHTTPRequestHandler):
     def _check_bfbm_token(self, settings, parsed) -> bool:
         token = parse_qs(parsed.query).get("token", [""])[0]
@@ -191,6 +284,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/create-test",
             "/bfbm/create-live-4",
             "/bfbm/markets.json",
+            "/bfbm/live-overlap.json",
             "/bfbm/notify-bet",
             "/health",
         }:
@@ -214,6 +308,21 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 storage.close()
             body = json.dumps({"markets": rows}, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if parsed.path == "/bfbm/live-overlap.json":
+            try:
+                data = asyncio.run(bfbm_totalcorner_overlap(settings))
+                body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+                self.send_response(200)
+            except Exception as exc:
+                logger.exception("Erro ao cruzar TotalCorner com BFBM")
+                body = json.dumps({"error": type(exc).__name__}, ensure_ascii=False).encode("utf-8")
+                self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
