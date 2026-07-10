@@ -76,6 +76,8 @@ def _normalize_name(value: str) -> str:
         "Nacional Potosi": "Nacional Potos\u00ed",
         "Club Aurora": "Aurora",
         "America de Cali": "Am\u00e9rica de Cali",
+        "Shandong Luneng": "Shandong Taishan",
+        "Shandong Luneng Taishan": "Shandong Taishan",
     }
     cleaned = str(value or "").strip()
     for source, target in aliases.items():
