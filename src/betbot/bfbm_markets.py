@@ -306,6 +306,26 @@ def find_bfbm_market(
     return best[1] if best else None
 
 
+def find_bfbm_event_family_market(
+    catalog_rows: list[dict[str, Any]],
+    event_name: str,
+    desired_family: str,
+    min_score: int = 75,
+) -> dict[str, Any] | None:
+    best: tuple[int, dict[str, Any]] | None = None
+    for row in catalog_rows:
+        if not _active_market(row):
+            continue
+        if market_family(str(row.get("market_name") or "")) != desired_family:
+            continue
+        score = _event_score(event_name, str(row.get("event_name") or ""))
+        if score < min_score:
+            continue
+        if best is None or score > best[0]:
+            best = (score, row)
+    return best[1] if best else None
+
+
 def split_event_teams(event_name: str) -> tuple[str, str] | None:
     match = re.split(r"\s+(?:x|v|vs)\s+", event_name, maxsplit=1, flags=re.IGNORECASE)
     if len(match) != 2:
