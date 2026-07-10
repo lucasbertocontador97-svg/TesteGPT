@@ -132,8 +132,21 @@ def _corner_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     }
 
 
+def _match_odds_tip(alert: dict[str, Any]) -> dict[str, str] | None:
+    selection = str(alert.get("selection", "") or "").strip()
+    if not selection:
+        return None
+    return {
+        "MarketType": "MATCH_ODDS",
+        "MarketName": "Resultado da partida",
+        "SelectionName": selection,
+    }
+
+
 def _tip_market(alert: dict[str, Any]) -> dict[str, str] | None:
     market = str(alert.get("market", "")).lower()
+    if any(word in market for word in ("resultado", "match odds", "vitoria", "vitória")):
+        return _match_odds_tip(alert)
     if any(word in market for word in ("goal", "gol")):
         return _goal_tip(alert)
     if any(word in market for word in ("corner", "escanteio")):
@@ -150,7 +163,8 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
         return None
     price = _num(alert.get("odd")) or 0.0
     price_text = f"{price:.2f}" if price > 0 else ""
-    stake_text = f"{config.stake:.2f}"
+    is_match_odds = market.get("MarketType") == "MATCH_ODDS"
+    stake_text = "1.00" if is_match_odds else f"{config.stake:.2f}"
     row = {
         "Provider": config.provider,
         "Handicap": "0",
@@ -166,8 +180,8 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
         "Price": price_text,
         "Size": stake_text,
         "Points": "1",
-        "MinPrice": f"{config.min_price:.2f}",
-        "MaxPrice": f"{config.max_price:.2f}",
+        "MinPrice": "1.01" if is_match_odds else f"{config.min_price:.2f}",
+        "MaxPrice": "100.00" if is_match_odds else f"{config.max_price:.2f}",
         "BSP": "False",
     }
     return row

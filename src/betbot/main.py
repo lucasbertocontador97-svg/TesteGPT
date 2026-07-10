@@ -70,18 +70,17 @@ def _forced_live_decision(game: GameSnapshot) -> Decision:
         shots_on += _tc_int(values, "Shots on Goal")
     current_goals = (game.score_home or 0) + (game.score_away or 0)
 
-    line = max(0.5, current_goals + 0.5)
     return Decision(
         True,
         90,
-        "Mais gols",
-        "over",
+        "Resultado da partida",
+        game.home,
         "Conferir manualmente",
         0.0,
-        line,
-        f"TIP LIVE TESTE BFBM: jogo ao vivo real; usando mercado de gols para casar com os mercados carregados no BFBM. Gols {current_goals}, escanteios {corners}, chutes {shots}, no gol {shots_on}.",
+        None,
+        f"TIP LIVE TESTE BFBM: jogo ao vivo real; usando Resultado da partida para casar com os mercados carregados no BFBM. Gols {current_goals}, escanteios {corners}, chutes {shots}, no gol {shots_on}.",
         "baixa",
-        f"bfbm-live4|{game.event_id}|goals|{line:g}|{datetime.utcnow().strftime('%H%M%S')}",
+        f"bfbm-live4|{game.event_id}|match_odds|{datetime.utcnow().strftime('%H%M%S')}",
         market_status=totalcorner_market_status(game.totalcorner_match, "goals"),
     )
 
