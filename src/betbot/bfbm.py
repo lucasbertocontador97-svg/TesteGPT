@@ -105,7 +105,17 @@ def _default_start_time() -> str:
 
 
 def _bfbm_clean_name(value: str) -> str:
-    return value.replace("Nublense", "\u00d1ublense").replace("O'Higgins", "OHiggins")
+    aliases = {
+        "Nublense": "\u00d1ublense",
+        "O'Higgins": "OHiggins",
+        "Nacional Potosi": "Nacional Potos\u00ed",
+        "Club Aurora": "Aurora",
+        "America de Cali": "Am\u00e9rica de Cali",
+    }
+    cleaned = value
+    for source, target in aliases.items():
+        cleaned = cleaned.replace(source, target)
+    return cleaned
 
 
 def _bfbm_clean_event_name(event_name: str) -> str:
