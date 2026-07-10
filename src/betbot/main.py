@@ -175,7 +175,7 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
         seen_markets: set[str] = set()
         for row in active_catalog:
             score = _event_score(event_label, str(row.get("event_name") or ""))
-            if score < 55:
+            if score < 75:
                 continue
             market_name = str(row.get("market_name") or "")
             key = f"{row.get('event_id') or ''}|{row.get('market_id') or ''}|{market_name}"
