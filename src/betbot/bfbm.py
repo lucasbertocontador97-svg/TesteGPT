@@ -243,14 +243,14 @@ def _selection_for_catalog_market(row: dict[str, str], market: dict[str, Any]) -
     return selection
 
 
-def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[str, Any]]) -> dict[str, str]:
+def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[str, Any]]) -> dict[str, str] | None:
     if not catalog_rows:
         return row
     family = market_family(row.get("MarketName", ""))
     desired_line = market_line(row.get("MarketName", ""))
     match = find_bfbm_market(catalog_rows, row.get("EventName", ""), family, desired_line)
     if not match:
-        return row
+        return None
     enriched = row.copy()
     enriched["EventName"] = str(match.get("event_name") or row.get("EventName", ""))
     enriched["MarketName"] = str(match.get("market_name") or row.get("MarketName", ""))
@@ -275,7 +275,7 @@ def tips_full_csv(alerts: list[dict[str, Any]], config: BfbmConfig, catalog_rows
     buffer = io.StringIO(newline="")
     rows = [row for alert in alerts if (row := alert_to_bfbm_row(alert, config))]
     if catalog_rows:
-        rows = [enrich_row_from_bfbm_catalog(row, catalog_rows) for row in rows]
+        rows = [matched for row in rows if (matched := enrich_row_from_bfbm_catalog(row, catalog_rows))]
     writer = csv.DictWriter(buffer, fieldnames=BFBM_COLUMNS, extrasaction="ignore")
     writer.writeheader()
     for row in rows:
@@ -287,7 +287,7 @@ def tips_rich_csv(alerts: list[dict[str, Any]], config: BfbmConfig, catalog_rows
     buffer = io.StringIO(newline="")
     rows = [row for alert in alerts if (row := alert_to_bfbm_row(alert, config))]
     if catalog_rows:
-        rows = [enrich_row_from_bfbm_catalog(row, catalog_rows) for row in rows]
+        rows = [matched for row in rows if (matched := enrich_row_from_bfbm_catalog(row, catalog_rows))]
     if any(row.get("MarketType") == "MATCH_ODDS" for row in rows):
         rows = [row for row in rows if row.get("MarketType") == "MATCH_ODDS"]
     for row in list(rows):
