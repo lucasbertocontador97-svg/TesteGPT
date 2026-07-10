@@ -254,6 +254,9 @@ def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[st
     enriched = row.copy()
     enriched["EventName"] = str(match.get("event_name") or row.get("EventName", ""))
     enriched["MarketName"] = str(match.get("market_name") or row.get("MarketName", ""))
+    enriched["EventId"] = str(match.get("event_id") or row.get("EventId", "0") or "0")
+    enriched["MarketId"] = str(match.get("market_id") or row.get("MarketId", "0") or "0")
+    enriched["MarketType"] = str(match.get("market_type") or row.get("MarketType", ""))
     enriched["SelectionName"] = _selection_for_catalog_market(enriched, match)
     start_time = str(match.get("start_time") or "")
     if len(start_time) >= 10 and start_time[:4].isdigit():

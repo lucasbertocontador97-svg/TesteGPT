@@ -7,11 +7,13 @@ if (-not (Test-Path -LiteralPath $Python)) {
 }
 
 $Scanner = Join-Path $RepoRoot "scripts\bfbm_market_scanner.py"
-$ExportPath = Join-Path $env:USERPROFILE "OneDrive\Desktop\................csv"
+$ExportPath = Join-Path $env:USERPROFILE "OneDrive\Desktop\EXPORTAR DADOS VISIVEIS.csv"
+$MarketExportPath = Join-Path $env:USERPROFILE "OneDrive\Desktop\EXPORTAR MERCADOS.csv"
 $PostUrl = "https://testegpt-production.up.railway.app/bfbm/markets/snapshot?token=xBW42VXUy3h5Xhx3mSQeX83CuZ4-BldH"
 
 & $Python $Scanner `
     --export-path $ExportPath `
+    --market-export-path $MarketExportPath `
     --post-url $PostUrl `
     --poll-seconds 5 `
     --post-interval-seconds 30

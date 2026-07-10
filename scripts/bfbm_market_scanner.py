@@ -15,7 +15,12 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from betbot.bfbm_markets import markets_to_payload, parse_exported_markets_csv  # noqa: E402
+from betbot.bfbm_markets import (  # noqa: E402
+    markets_to_payload,
+    merge_market_catalog,
+    parse_exported_market_catalog_csv,
+    parse_exported_markets_csv,
+)
 
 
 def read_text(path: Path) -> str:
@@ -39,10 +44,17 @@ def post_json(url: str, payload: dict, timeout: int = 15) -> str:
         return response.read().decode("utf-8", errors="replace")
 
 
-def scan_once(export_path: Path, snapshot_path: Path, post_url: str | None) -> tuple[int, str]:
+def scan_once(export_path: Path, snapshot_path: Path, post_url: str | None, market_export_path: Path | None = None) -> tuple[int, str]:
     text = read_text(export_path)
     markets = parse_exported_markets_csv(text)
     stat = export_path.stat()
+    if market_export_path and market_export_path.exists():
+        catalog_text = read_text(market_export_path)
+        catalog = parse_exported_market_catalog_csv(catalog_text)
+        markets = merge_market_catalog(markets, catalog)
+        market_stat = market_export_path.stat()
+        if market_stat.st_mtime > stat.st_mtime:
+            stat = market_stat
     modified_at = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
     age_seconds = max(0.0, time.time() - stat.st_mtime)
     payload = markets_to_payload(
@@ -62,6 +74,7 @@ def scan_once(export_path: Path, snapshot_path: Path, post_url: str | None) -> t
 def main() -> int:
     parser = argparse.ArgumentParser(description="Scanner local de mercados exportados do BFBM.")
     parser.add_argument("--export-path", required=True, help="CSV exportado pelo BFBM com os mercados visiveis.")
+    parser.add_argument("--market-export-path", default="", help="CSV 'Exportar mercados' do BFBM com EventId/MarketId.")
     parser.add_argument(
         "--snapshot-path",
         default=str(Path.home() / "AppData/Local/TesteGPT/bfbm_markets_snapshot.json"),
@@ -74,6 +87,7 @@ def main() -> int:
     args = parser.parse_args()
 
     export_path = Path(args.export_path)
+    market_export_path = Path(args.market_export_path) if args.market_export_path.strip() else None
     snapshot_path = Path(args.snapshot_path)
     post_url = args.post_url.strip() or None
     last_signature: tuple[int, int] | None = None
@@ -89,7 +103,7 @@ def main() -> int:
             now = time.time()
             should_post = args.once or signature != last_signature or (post_url and now - last_post_at >= max(5, args.post_interval_seconds))
             if should_post:
-                count, result = scan_once(export_path, snapshot_path, post_url)
+                count, result = scan_once(export_path, snapshot_path, post_url, market_export_path)
                 print(f"[scanner] mercados={count} envio={result}", flush=True)
                 last_signature = signature
                 last_post_at = now

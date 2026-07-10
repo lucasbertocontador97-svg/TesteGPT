@@ -55,6 +55,9 @@ class Storage:
                 captured_at datetime default current_timestamp,
                 event_name text not null,
                 market_name text not null,
+                event_id text,
+                market_id text,
+                market_type text,
                 status text,
                 start_time text,
                 live_score text,
@@ -82,6 +85,9 @@ class Storage:
             ("source_path", "text"),
             ("source_modified_at", "text"),
             ("source_age_seconds", "real"),
+            ("event_id", "text"),
+            ("market_id", "text"),
+            ("market_type", "text"),
         ):
             if column not in market_columns:
                 self.conn.execute(f"alter table bfbm_markets add column {column} {ddl_type}")
@@ -93,15 +99,19 @@ class Storage:
             self.conn.executemany(
                 """
                 insert into bfbm_markets (
-                    event_name, market_name, status, start_time, live_score, live_time,
+                    event_name, market_name, event_id, market_id, market_type,
+                    status, start_time, live_score, live_time,
                     favorite, winner, total_matched, raw_json, source_path,
                     source_modified_at, source_age_seconds
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         row.get("event_name", ""),
                         row.get("market_name", ""),
+                        row.get("event_id", ""),
+                        row.get("market_id", ""),
+                        row.get("market_type", ""),
                         row.get("status", ""),
                         row.get("start_time", ""),
                         row.get("live_score", ""),

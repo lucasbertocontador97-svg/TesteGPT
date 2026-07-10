@@ -36,6 +36,11 @@ RICH_COLUMNS = [
 ]
 
 
+def _valid_betfair_id(value: str) -> bool:
+    text = str(value or "").strip()
+    return text.isdigit() and int(text) > 0
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -197,12 +202,22 @@ def _corner_alias_rows(row: dict[str, str]) -> list[dict[str, str]]:
 
 
 class BridgeState:
-    def __init__(self, state_path: Path, *, min_price: float, max_price: float, max_tips: int, tip_keep_seconds: int) -> None:
+    def __init__(
+        self,
+        state_path: Path,
+        *,
+        min_price: float,
+        max_price: float,
+        max_tips: int,
+        tip_keep_seconds: int,
+        require_ids: bool,
+    ) -> None:
         self.state_path = state_path
         self.min_price = min_price
         self.max_price = max_price
         self.max_tips = max_tips
         self.tip_keep_seconds = tip_keep_seconds
+        self.require_ids = require_ids
         self.lock = threading.Lock()
         self.rows: list[dict[str, str]] = []
         self.last_source_ok: str | None = None
@@ -226,7 +241,7 @@ class BridgeState:
             for row in loaded_rows:
                 last_seen = row.get("__last_seen") or load_ts
                 normalized = _normalize_row(row, min_price=self.min_price, max_price=self.max_price)
-                if normalized:
+                if normalized and self._has_required_ids(normalized):
                     normalized["__last_seen"] = str(last_seen)
                     normalized_rows.append(normalized)
             self.rows = normalized_rows
@@ -257,6 +272,14 @@ class BridgeState:
             row.get("SelectionName", "").casefold(),
         )
 
+    def _has_required_ids(self, row: dict[str, str]) -> bool:
+        if not self.require_ids:
+            return True
+        return (
+            _valid_betfair_id(row.get("EventId", ""))
+            and _valid_betfair_id(row.get("MarketId", ""))
+        )
+
     def _visible_rows(self, rows: list[dict[str, str]] | None = None) -> list[dict[str, str]]:
         rows = self.rows if rows is None else rows
         visible: list[dict[str, str]] = []
@@ -267,6 +290,8 @@ class BridgeState:
                 if normalized:
                     normalized["__last_seen"] = str(row.get("__last_seen") or now_ts)
                     row = normalized
+            if not self._has_required_ids(row):
+                continue
             row.setdefault("__last_seen", str(now_ts))
             last_seen = _float(str(row.get("__last_seen") or now_ts), now_ts)
             if now_ts - last_seen <= self.tip_keep_seconds:
@@ -275,13 +300,13 @@ class BridgeState:
 
     def replace_rows(self, rows: list[dict[str, str]]) -> int:
         cleaned: list[dict[str, str]] = []
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[str, str, str, str]] = set()
         now_ts = _now_ts()
         for row in rows:
-            event = row.get("EventName", "").casefold()
-            market = row.get("MarketType", "").casefold()
-            key = (event, market)
-            if not event or key in seen:
+            key = self._row_key(row)
+            if not row.get("EventName", "") or key in seen:
+                continue
+            if not self._has_required_ids(row):
                 continue
             seen.add(key)
             row["__last_seen"] = str(now_ts)
@@ -315,7 +340,7 @@ class BridgeState:
 
     def add_row(self, raw: dict[str, Any]) -> bool:
         row = _normalize_row(raw, min_price=self.min_price, max_price=self.max_price)
-        if not row:
+        if not row or not self._has_required_ids(row):
             return False
         with self.lock:
             aliases = _corner_alias_rows(row)
@@ -343,6 +368,8 @@ class BridgeState:
         row["MinPrice"] = row["MinPrice"] or f"{self.min_price:.2f}"
         row["MaxPrice"] = row["MaxPrice"] or f"{self.max_price:.2f}"
         row["BSP"] = row["BSP"] or "False"
+        if not self._has_required_ids(row):
+            return False
         row["__last_seen"] = str(_now_ts())
         row["__raw"] = "1"
         with self.lock:
@@ -542,6 +569,7 @@ def main() -> None:
     parser.add_argument("--max-price", type=float, default=100.00)
     parser.add_argument("--max-tips", type=int, default=4)
     parser.add_argument("--tip-keep-seconds", type=int, default=600)
+    parser.add_argument("--allow-missing-ids", action="store_true", help="Permite enviar tips sem EventId/MarketId/SelectionId.")
     parser.add_argument(
         "--log-path",
         default=str(Path.home() / "AppData/Local/bfbotmanager.com/Bf Bot Manager V3/log.txt"),
@@ -558,6 +586,7 @@ def main() -> None:
         max_price=args.max_price,
         max_tips=args.max_tips,
         tip_keep_seconds=args.tip_keep_seconds,
+        require_ids=not args.allow_missing_ids,
     )
     if args.source_url:
         threading.Thread(target=source_loop, args=(state, args.source_url, args.source_poll_seconds), daemon=True).start()

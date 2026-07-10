@@ -14,6 +14,9 @@ from typing import Any
 class BfbmMarket:
     event_name: str
     market_name: str
+    event_id: str = ""
+    market_id: str = ""
+    market_type: str = ""
     status: str = ""
     start_time: str = ""
     live_score: str = ""
@@ -77,6 +80,9 @@ def parse_exported_markets_csv(text: str) -> list[BfbmMarket]:
             BfbmMarket(
                 event_name=event_name,
                 market_name=market_name,
+                event_id=_row_value(row, "EventId", "ID do Evento"),
+                market_id=_row_value(row, "MarketId", "ID do mercado"),
+                market_type=_row_value(row, "MarketType", "Tipo de mercado"),
                 status=_row_value(row, "Status"),
                 start_time=_row_value(row, "Hora de início", "Start time"),
                 live_score=_row_value(row, "Placar ao vivo", "Live score"),
@@ -88,6 +94,77 @@ def parse_exported_markets_csv(text: str) -> list[BfbmMarket]:
             )
         )
     return markets
+
+
+def parse_exported_market_catalog_csv(text: str) -> list[BfbmMarket]:
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    reader = csv.DictReader(io.StringIO(text))
+    markets: list[BfbmMarket] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in reader:
+        event_name = _row_value(row, "EventName")
+        market_name = _row_value(row, "MarketName")
+        market_id = _row_value(row, "MarketId")
+        if not event_name or not market_name or not market_id:
+            continue
+        key = (normalize_event(event_name), normalize_text(market_name), market_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        markets.append(
+            BfbmMarket(
+                event_name=event_name,
+                market_name=market_name,
+                event_id=_row_value(row, "EventId"),
+                market_id=market_id,
+                market_type=_row_value(row, "MarketType"),
+                start_time=_row_value(row, "StartTime"),
+                total_matched=_row_value(row, "TotalMatched"),
+                raw={str(k): v for k, v in row.items()},
+            )
+        )
+    return markets
+
+
+def merge_market_catalog(base: list[BfbmMarket], catalog: list[BfbmMarket]) -> list[BfbmMarket]:
+    if not catalog:
+        return base
+    catalog_by_key: dict[tuple[str, str], BfbmMarket] = {}
+    for item in catalog:
+        catalog_by_key[(normalize_event(item.event_name), normalize_text(item.market_name))] = item
+    merged: list[BfbmMarket] = []
+    used: set[tuple[str, str]] = set()
+    for item in base:
+        key = (normalize_event(item.event_name), normalize_text(item.market_name))
+        extra = catalog_by_key.get(key)
+        used.add(key)
+        if not extra:
+            merged.append(item)
+            continue
+        raw = dict(extra.raw or {})
+        raw.update(item.raw or {})
+        merged.append(
+            BfbmMarket(
+                event_name=extra.event_name or item.event_name,
+                market_name=extra.market_name or item.market_name,
+                event_id=extra.event_id or item.event_id,
+                market_id=extra.market_id or item.market_id,
+                market_type=extra.market_type or item.market_type,
+                status=item.status,
+                start_time=extra.start_time or item.start_time,
+                live_score=item.live_score,
+                live_time=item.live_time,
+                favorite=item.favorite,
+                winner=item.winner,
+                total_matched=extra.total_matched or item.total_matched,
+                raw=raw,
+            )
+        )
+    for key, item in catalog_by_key.items():
+        if key not in used:
+            merged.append(item)
+    return merged
 
 
 def markets_to_payload(
@@ -106,6 +183,9 @@ def markets_to_payload(
             {
                 "event_name": item.event_name,
                 "market_name": item.market_name,
+                "event_id": item.event_id,
+                "market_id": item.market_id,
+                "market_type": item.market_type,
                 "status": item.status,
                 "start_time": item.start_time,
                 "live_score": item.live_score,
@@ -142,6 +222,9 @@ def payload_to_markets(payload: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "event_name": event_name,
                 "market_name": market_name,
+                "event_id": str(row.get("event_id") or "").strip(),
+                "market_id": str(row.get("market_id") or "").strip(),
+                "market_type": str(row.get("market_type") or "").strip(),
                 "status": str(row.get("status") or "").strip(),
                 "start_time": str(row.get("start_time") or "").strip(),
                 "live_score": str(row.get("live_score") or "").strip(),
