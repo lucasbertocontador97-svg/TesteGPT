@@ -106,12 +106,12 @@ def _normalize_corner_market(row: dict[str, Any], selection: str, market_name: s
         return selection, market_name, market_type
     line_match = re.search(r"(\d+(?:[,.]\d+)?)", combined)
     if not line_match:
-        return selection, market_name, market_type.replace("_CORNERS", "")
+        return selection, market_name, market_type
     line = line_match.group(1).replace(",", ".")
     try:
         line_value = float(line)
     except ValueError:
-        return selection, market_name, market_type.replace("_CORNERS", "")
+        return selection, market_name, market_type
     code = str(int(round(line_value * 10))).zfill(2)
     selection_source = selection or combined
     if re.search(r"\b(Menos|Under)\b", selection_source, re.IGNORECASE):
@@ -121,7 +121,7 @@ def _normalize_corner_market(row: dict[str, Any], selection: str, market_name: s
     else:
         side = "Under" if re.search(r"\b(Menos|Under)\b", combined, re.IGNORECASE) else "Over"
     label = f"{line_value:g}"
-    return f"{side} {label} Corners", f"Over/Under {label} Corners", f"OVER_UNDER_{code}"
+    return f"{side} {label} Corners", f"Over/Under {label} Corners", f"OVER_UNDER_{code}_CORNERS"
 
 
 def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -> dict[str, str] | None:
@@ -181,9 +181,14 @@ class BridgeState:
         with self.lock:
             loaded_rows = [row for row in data.get("rows", []) if isinstance(row, dict)]
             load_ts = str(_now_ts())
+            normalized_rows: list[dict[str, str]] = []
             for row in loaded_rows:
-                row.setdefault("__last_seen", load_ts)
-            self.rows = loaded_rows
+                last_seen = row.get("__last_seen") or load_ts
+                normalized = _normalize_row(row, min_price=self.min_price, max_price=self.max_price)
+                if normalized:
+                    normalized["__last_seen"] = str(last_seen)
+                    normalized_rows.append(normalized)
+            self.rows = normalized_rows
             self.last_source_ok = data.get("last_source_ok")
             self.last_source_error = data.get("last_source_error")
             self.last_bet_notifications = [item for item in data.get("last_bet_notifications", []) if isinstance(item, dict)][-20:]
@@ -215,6 +220,10 @@ class BridgeState:
         visible: list[dict[str, str]] = []
         now_ts = _now_ts()
         for row in rows:
+            normalized = _normalize_row(row, min_price=self.min_price, max_price=self.max_price)
+            if normalized:
+                normalized["__last_seen"] = str(row.get("__last_seen") or now_ts)
+                row = normalized
             row.setdefault("__last_seen", str(now_ts))
             last_seen = _float(str(row.get("__last_seen") or now_ts), now_ts)
             if now_ts - last_seen <= self.tip_keep_seconds:

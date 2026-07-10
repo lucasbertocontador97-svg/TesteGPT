@@ -149,7 +149,7 @@ def _corner_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     market_code = str(int(round(line * 10))).zfill(2)
     side = "Over" if str(alert.get("selection", "")).lower() == "over" else "Under"
     return {
-        "MarketType": f"OVER_UNDER_{market_code}",
+        "MarketType": f"OVER_UNDER_{market_code}_CORNERS",
         "MarketName": f"Over/Under {line_label} Corners",
         "SelectionName": f"{side} {line_label} Corners",
     }
