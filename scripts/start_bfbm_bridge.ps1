@@ -6,7 +6,7 @@ if (-not (Test-Path -LiteralPath $Python)) {
     $Python = "python"
 }
 
-$SourceUrl = "https://testegpt-production.up.railway.app/bfbm/live-clean.csv?token=xBW42VXUy3h5Xhx3mSQeX83CuZ4-BldH"
+$SourceUrl = "https://testegpt-production.up.railway.app/bfbm/live-full.csv?token=xBW42VXUy3h5Xhx3mSQeX83CuZ4-BldH"
 $NotifyUrl = "https://testegpt-production.up.railway.app/bfbm/notify-bet?token=xBW42VXUy3h5Xhx3mSQeX83CuZ4-BldH"
 $Bridge = Join-Path $RepoRoot "scripts\bfbm_bridge.py"
 

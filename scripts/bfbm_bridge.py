@@ -69,9 +69,27 @@ def _float(value: str, default: float = 0.0) -> float:
         return default
 
 
+def _normalize_name(value: str) -> str:
+    aliases = {
+        "Nublense": "\u00d1ublense",
+        "O'Higgins": "OHiggins",
+        "Nacional Potosi": "Nacional Potos\u00ed",
+        "Club Aurora": "Aurora",
+        "America de Cali": "Am\u00e9rica de Cali",
+    }
+    cleaned = str(value or "").strip()
+    for source, target in aliases.items():
+        cleaned = cleaned.replace(source, target)
+    return cleaned
+
+
+def _normalize_event_name(value: str) -> str:
+    return _normalize_name(value).replace(" v ", " x ")
+
+
 def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -> dict[str, str] | None:
-    event = str(row.get("EventName") or row.get("event") or "").strip()
-    selection = str(row.get("SelectionName") or row.get("selection") or "").strip()
+    event = _normalize_event_name(str(row.get("EventName") or row.get("event") or ""))
+    selection = _normalize_name(str(row.get("SelectionName") or row.get("selection") or ""))
     market_type = str(row.get("MarketType") or row.get("market_type") or "").strip()
     if not event or not selection or not market_type:
         return None

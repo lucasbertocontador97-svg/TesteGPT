@@ -34,6 +34,7 @@ http://127.0.0.1:8787/status
 ## O que ela faz
 
 - Puxa as tips do Railway.
+- Usa o feed completo do bot (`/bfbm/live-full.csv`), entao tambem recebe entradas criadas pelo Telegram/Railway.
 - Mantem no maximo 4 tips.
 - Remove duplicada por jogo/mercado.
 - Garante odd minima `1.80`.
