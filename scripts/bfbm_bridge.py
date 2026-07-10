@@ -136,21 +136,6 @@ def _value_from(row: dict[str, Any], *names: str) -> str:
     return ""
 
 
-def _has_betfair_ids(row: dict[str, str]) -> bool:
-    return bool(row.get("SelectionId") and row.get("MarketId") and row.get("EventId"))
-
-
-def _is_corner_row(row: dict[str, str]) -> bool:
-    combined = " ".join(
-        [
-            row.get("SelectionName", ""),
-            row.get("MarketName", ""),
-            row.get("MarketType", ""),
-        ]
-    )
-    return bool(re.search(r"corner|escanteio|COMBINED_TOTAL", combined, re.IGNORECASE))
-
-
 def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -> dict[str, str] | None:
     event = _normalize_event_name(str(row.get("EventName") or row.get("event") or ""))
     selection = _normalize_name(str(row.get("SelectionName") or row.get("selection") or ""))
@@ -398,8 +383,6 @@ def parse_source_csv(text: str, *, min_price: float, max_price: float) -> list[d
     for raw in csv.DictReader(text.splitlines()):
         row = _normalize_row(raw, min_price=min_price, max_price=max_price)
         if row:
-            if _is_corner_row(row) and not _has_betfair_ids(row):
-                continue
             rows.append(row)
     return rows
 
