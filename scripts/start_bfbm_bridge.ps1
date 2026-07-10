@@ -18,4 +18,5 @@ $Bridge = Join-Path $RepoRoot "scripts\bfbm_bridge.py"
     --notify-url $NotifyUrl `
     --min-price 1.80 `
     --max-price 100.00 `
-    --max-tips 4
+    --max-tips 4 `
+    --tip-keep-seconds 600

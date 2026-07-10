@@ -36,6 +36,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _now_ts() -> float:
+    return datetime.now(timezone.utc).timestamp()
+
+
 def _read_url(url: str, timeout: int = 15) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "TesteGPT-BFBM-Bridge/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -152,11 +156,12 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
 
 
 class BridgeState:
-    def __init__(self, state_path: Path, *, min_price: float, max_price: float, max_tips: int) -> None:
+    def __init__(self, state_path: Path, *, min_price: float, max_price: float, max_tips: int, tip_keep_seconds: int) -> None:
         self.state_path = state_path
         self.min_price = min_price
         self.max_price = max_price
         self.max_tips = max_tips
+        self.tip_keep_seconds = tip_keep_seconds
         self.lock = threading.Lock()
         self.rows: list[dict[str, str]] = []
         self.last_source_ok: str | None = None
@@ -174,7 +179,11 @@ class BridgeState:
         except (OSError, json.JSONDecodeError):
             return
         with self.lock:
-            self.rows = [row for row in data.get("rows", []) if isinstance(row, dict)]
+            loaded_rows = [row for row in data.get("rows", []) if isinstance(row, dict)]
+            load_ts = str(_now_ts())
+            for row in loaded_rows:
+                row.setdefault("__last_seen", load_ts)
+            self.rows = loaded_rows
             self.last_source_ok = data.get("last_source_ok")
             self.last_source_error = data.get("last_source_error")
             self.last_bet_notifications = [item for item in data.get("last_bet_notifications", []) if isinstance(item, dict)][-20:]
@@ -194,9 +203,28 @@ class BridgeState:
             }
         self.state_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _row_key(self, row: dict[str, str]) -> tuple[str, str, str]:
+        return (
+            row.get("EventName", "").casefold(),
+            row.get("MarketType", "").casefold(),
+            row.get("SelectionName", "").casefold(),
+        )
+
+    def _visible_rows(self, rows: list[dict[str, str]] | None = None) -> list[dict[str, str]]:
+        rows = self.rows if rows is None else rows
+        visible: list[dict[str, str]] = []
+        now_ts = _now_ts()
+        for row in rows:
+            row.setdefault("__last_seen", str(now_ts))
+            last_seen = _float(str(row.get("__last_seen") or now_ts), now_ts)
+            if now_ts - last_seen <= self.tip_keep_seconds:
+                visible.append(row)
+        return visible
+
     def replace_rows(self, rows: list[dict[str, str]]) -> int:
         cleaned: list[dict[str, str]] = []
         seen: set[tuple[str, str]] = set()
+        now_ts = _now_ts()
         for row in rows:
             event = row.get("EventName", "").casefold()
             market = row.get("MarketType", "").casefold()
@@ -204,17 +232,24 @@ class BridgeState:
             if not event or key in seen:
                 continue
             seen.add(key)
+            row["__last_seen"] = str(now_ts)
             cleaned.append(row)
             if len(cleaned) >= self.max_tips:
                 break
         with self.lock:
-            self.rows = cleaned
+            merged_by_key: dict[tuple[str, str, str], dict[str, str]] = {
+                self._row_key(row): row for row in self._visible_rows()
+            }
+            for row in cleaned:
+                merged_by_key[self._row_key(row)] = row
+            self.rows = list(merged_by_key.values())[-self.max_tips :]
             self.last_source_ok = _now()
             self.last_source_error = None
             self.source_history.append(
                 {
                     "at": self.last_source_ok,
-                    "count": len(cleaned),
+                    "source_count": len(cleaned),
+                    "active_count": len(self.rows),
                     "rows": [
                         {
                             "event": row.get("EventName", ""),
@@ -222,13 +257,13 @@ class BridgeState:
                             "selection": row.get("SelectionName", ""),
                             "market_type": row.get("MarketType", ""),
                         }
-                        for row in cleaned
+                        for row in self.rows
                     ],
                 }
             )
             self.source_history = self.source_history[-200:]
         self.save()
-        return len(cleaned)
+        return len(self.rows)
 
     def add_row(self, raw: dict[str, Any]) -> bool:
         row = _normalize_row(raw, min_price=self.min_price, max_price=self.max_price)
@@ -249,13 +284,14 @@ class BridgeState:
 
     def csv(self) -> str:
         with self.lock:
+            self.rows = self._visible_rows()
             return _csv_text(list(self.rows))
 
     def status(self) -> dict[str, Any]:
         with self.lock:
             return {
                 "ok": True,
-                "tips": len(self.rows),
+                "tips": len(self._visible_rows()),
                 "last_source_ok": self.last_source_ok,
                 "last_source_error": self.last_source_error,
                 "current_rows": [
@@ -265,7 +301,7 @@ class BridgeState:
                         "selection": row.get("SelectionName", ""),
                         "market_type": row.get("MarketType", ""),
                     }
-                    for row in self.rows
+                    for row in self._visible_rows()
                 ],
                 "last_bet_notifications": self.last_bet_notifications[-5:],
             }
@@ -428,6 +464,7 @@ def main() -> None:
     parser.add_argument("--min-price", type=float, default=1.80)
     parser.add_argument("--max-price", type=float, default=100.00)
     parser.add_argument("--max-tips", type=int, default=4)
+    parser.add_argument("--tip-keep-seconds", type=int, default=600)
     parser.add_argument(
         "--log-path",
         default=str(Path.home() / "AppData/Local/bfbotmanager.com/Bf Bot Manager V3/log.txt"),
@@ -438,7 +475,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    state = BridgeState(Path(args.state_path), min_price=args.min_price, max_price=args.max_price, max_tips=args.max_tips)
+    state = BridgeState(
+        Path(args.state_path),
+        min_price=args.min_price,
+        max_price=args.max_price,
+        max_tips=args.max_tips,
+        tip_keep_seconds=args.tip_keep_seconds,
+    )
     if args.source_url:
         threading.Thread(target=source_loop, args=(state, args.source_url, args.source_poll_seconds), daemon=True).start()
     threading.Thread(target=monitor_bfbm_log, args=(state, Path(args.log_path), args.notify_url or None, 2), daemon=True).start()
