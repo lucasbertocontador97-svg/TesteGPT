@@ -41,6 +41,11 @@ def _valid_betfair_id(value: str) -> bool:
     return text.isdigit() and int(text) > 0
 
 
+def _valid_betfair_market_id(value: str) -> bool:
+    text = str(value or "").strip()
+    return bool(re.fullmatch(r"\d+(?:\.\d+)?", text)) and float(text) > 0
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -157,6 +162,11 @@ def _id_value_from(row: dict[str, Any], *names: str) -> str:
     return value if value.isdigit() else "0"
 
 
+def _market_id_value_from(row: dict[str, Any], *names: str) -> str:
+    value = _value_from(row, *names)
+    return value if _valid_betfair_market_id(value) else "0"
+
+
 def _start_time_value_from(row: dict[str, Any], *names: str) -> str:
     value = _value_from(row, *names)
     return value if value else "0001-01-01 00:00:00"
@@ -181,7 +191,7 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
         "Handicap": str(row.get("Handicap") or row.get("handicap") or "0").strip(),
         "SelectionName": selection,
         "SelectionId": _id_value_from(row, "SelectionId", "selection_id", "ID da selecao"),
-        "MarketId": _id_value_from(row, "MarketId", "market_id", "ID do mercado"),
+        "MarketId": _market_id_value_from(row, "MarketId", "market_id", "ID do mercado"),
         "EventId": _id_value_from(row, "EventId", "event_id", "ID do Evento"),
         "MarketName": market_name,
         "EventName": event,
@@ -277,7 +287,7 @@ class BridgeState:
             return True
         return (
             _valid_betfair_id(row.get("EventId", ""))
-            and _valid_betfair_id(row.get("MarketId", ""))
+            and _valid_betfair_market_id(row.get("MarketId", ""))
         )
 
     def _visible_rows(self, rows: list[dict[str, str]] | None = None) -> list[dict[str, str]]:
