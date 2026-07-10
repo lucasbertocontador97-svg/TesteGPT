@@ -16,7 +16,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
 from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
-from .bfbm_markets import _event_score, find_bfbm_event_family_market, find_bfbm_market, market_family, payload_to_markets
+from .bfbm_markets import _event_score, find_bfbm_market, market_family, payload_to_markets
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -224,11 +224,8 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
         }
         if signal.approved:
             exact_bfbm_market = find_bfbm_market(active_catalog, event_label, signal.market_family, signal.line)
-            family_bfbm_market = None
-            if not exact_bfbm_market and signal.market_family == "goals":
-                family_bfbm_market = find_bfbm_event_family_market(active_catalog, event_label, signal.market_family)
-            item["signal"]["bfbm_can_bet"] = bool(exact_bfbm_market or family_bfbm_market)
-            item["signal"]["bfbm_match_mode"] = "exact_line" if exact_bfbm_market else ("dynamic_goal_line" if family_bfbm_market else "none")
+            item["signal"]["bfbm_can_bet"] = bool(exact_bfbm_market)
+            item["signal"]["bfbm_match_mode"] = "exact_line" if exact_bfbm_market else "none"
         if scored_rows:
             matched.append(item)
         else:
@@ -924,12 +921,6 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     math_signal.market_family,
                     math_signal.line,
                 )
-                if not bfbm_market and math_signal.market_family == "goals":
-                    bfbm_market = find_bfbm_event_family_market(
-                        catalog_rows,
-                        f"{game.home} x {game.away}",
-                        math_signal.market_family,
-                    )
                 if not bfbm_market:
                     logger.info(
                         "BFBM bloqueou %s x %s: mercado %s linha %s nao existe no catalogo.",

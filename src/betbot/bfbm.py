@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .bfbm_markets import find_bfbm_event_family_market, find_bfbm_market, map_selection_to_event, market_family, market_line
+from .bfbm_markets import find_bfbm_market, map_selection_to_event, market_family, market_line
 
 
 BFBM_COLUMNS = [
@@ -257,22 +257,15 @@ def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[st
     family = market_family(row.get("MarketName", ""))
     desired_line = market_line(row.get("MarketName", ""))
     match = find_bfbm_market(catalog_rows, row.get("EventName", ""), family, desired_line)
-    dynamic_goal_line = False
-    if not match and family == "goals":
-        match = find_bfbm_event_family_market(catalog_rows, row.get("EventName", ""), family)
-        dynamic_goal_line = bool(match)
     if not match:
         return None
     enriched = row.copy()
     enriched["EventName"] = str(match.get("event_name") or row.get("EventName", ""))
-    enriched["MarketName"] = str(row.get("MarketName", "")) if dynamic_goal_line else str(match.get("market_name") or row.get("MarketName", ""))
+    enriched["MarketName"] = str(match.get("market_name") or row.get("MarketName", ""))
     enriched["EventId"] = str(match.get("event_id") or row.get("EventId", "0") or "0")
-    enriched["MarketId"] = "0" if dynamic_goal_line else str(match.get("market_id") or row.get("MarketId", "0") or "0")
-    enriched["MarketType"] = str(row.get("MarketType", "")) if dynamic_goal_line else str(match.get("market_type") or row.get("MarketType", ""))
-    if dynamic_goal_line:
-        enriched["SelectionName"] = str(row.get("SelectionName", ""))
-    else:
-        enriched["SelectionName"] = _selection_for_catalog_market(enriched, match)
+    enriched["MarketId"] = str(match.get("market_id") or row.get("MarketId", "0") or "0")
+    enriched["MarketType"] = str(match.get("market_type") or row.get("MarketType", ""))
+    enriched["SelectionName"] = _selection_for_catalog_market(enriched, match)
     start_time = str(match.get("start_time") or "")
     if len(start_time) >= 10 and start_time[:4].isdigit():
         enriched["StartTime"] = str(match.get("start_time"))

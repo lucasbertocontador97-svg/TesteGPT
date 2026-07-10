@@ -275,10 +275,6 @@ class BridgeState:
     def _has_required_ids(self, row: dict[str, str]) -> bool:
         if not self.require_ids:
             return True
-        market_type = str(row.get("MarketType", "") or "").upper()
-        market_name = str(row.get("MarketName", "") or "")
-        if market_type.startswith("OVER_UNDER_") and "Gol" in market_name:
-            return _valid_betfair_id(row.get("EventId", ""))
         return (
             _valid_betfair_id(row.get("EventId", ""))
             and _valid_betfair_id(row.get("MarketId", ""))
