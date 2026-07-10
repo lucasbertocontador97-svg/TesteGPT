@@ -70,6 +70,15 @@ def _bfbm_line_text(line: float) -> str:
     return _line_text(line).replace(".", ",")
 
 
+def _over_under_market_type(line: float) -> str | None:
+    doubled = line * 2
+    if abs(doubled - round(doubled)) > 0.001:
+        return None
+    if int(round(doubled)) % 2 == 0:
+        return None
+    return f"OVER_UNDER_{int(round(line * 10)):02d}"
+
+
 def _event_name(alert: dict[str, Any]) -> str:
     home = str(alert.get("home", "") or "").strip()
     away = str(alert.get("away", "") or "").strip()
@@ -147,8 +156,7 @@ def _goal_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     line = _num(alert.get("line"))
     if line is None:
         return None
-    supported = {0.5: "OVER_UNDER_05", 1.5: "OVER_UNDER_15", 2.5: "OVER_UNDER_25", 3.5: "OVER_UNDER_35"}
-    market_type = supported.get(line)
+    market_type = _over_under_market_type(line)
     if not market_type:
         return None
     side = "Mais" if str(alert.get("selection", "")).lower() == "over" else "Menos"
