@@ -290,7 +290,7 @@ async def create_live_bfbm_zero_zero_goal_tests(settings, count: int = 4) -> tup
                 break
             if (game.score_home or 0) != 0 or (game.score_away or 0) != 0:
                 continue
-            if not find_bfbm_event_family_market(catalog_rows, f"{game.home} x {game.away}", "goals"):
+            if not find_bfbm_market(catalog_rows, f"{game.home} x {game.away}", "goals", 0.5):
                 continue
             stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
             alert_key = f"bfbm-force-00-over05|{game.home}|{game.away}|{stamp}"
