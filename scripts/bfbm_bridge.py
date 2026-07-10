@@ -162,6 +162,7 @@ class BridgeState:
         self.last_source_ok: str | None = None
         self.last_source_error: str | None = None
         self.last_bet_notifications: list[dict[str, str]] = []
+        self.source_history: list[dict[str, Any]] = []
         self.seen_bet_ids: set[str] = set()
         self.load()
 
@@ -177,6 +178,7 @@ class BridgeState:
             self.last_source_ok = data.get("last_source_ok")
             self.last_source_error = data.get("last_source_error")
             self.last_bet_notifications = [item for item in data.get("last_bet_notifications", []) if isinstance(item, dict)][-20:]
+            self.source_history = [item for item in data.get("source_history", []) if isinstance(item, dict)][-200:]
             self.seen_bet_ids = set(data.get("seen_bet_ids", []))
 
     def save(self) -> None:
@@ -187,6 +189,7 @@ class BridgeState:
                 "last_source_ok": self.last_source_ok,
                 "last_source_error": self.last_source_error,
                 "last_bet_notifications": self.last_bet_notifications[-20:],
+                "source_history": self.source_history[-200:],
                 "seen_bet_ids": sorted(self.seen_bet_ids)[-500:],
             }
         self.state_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -208,6 +211,22 @@ class BridgeState:
             self.rows = cleaned
             self.last_source_ok = _now()
             self.last_source_error = None
+            self.source_history.append(
+                {
+                    "at": self.last_source_ok,
+                    "count": len(cleaned),
+                    "rows": [
+                        {
+                            "event": row.get("EventName", ""),
+                            "market": row.get("MarketName", ""),
+                            "selection": row.get("SelectionName", ""),
+                            "market_type": row.get("MarketType", ""),
+                        }
+                        for row in cleaned
+                    ],
+                }
+            )
+            self.source_history = self.source_history[-200:]
         self.save()
         return len(cleaned)
 
@@ -239,8 +258,21 @@ class BridgeState:
                 "tips": len(self.rows),
                 "last_source_ok": self.last_source_ok,
                 "last_source_error": self.last_source_error,
+                "current_rows": [
+                    {
+                        "event": row.get("EventName", ""),
+                        "market": row.get("MarketName", ""),
+                        "selection": row.get("SelectionName", ""),
+                        "market_type": row.get("MarketType", ""),
+                    }
+                    for row in self.rows
+                ],
                 "last_bet_notifications": self.last_bet_notifications[-5:],
             }
+
+    def history(self) -> list[dict[str, Any]]:
+        with self.lock:
+            return list(self.source_history[-50:])
 
     def source_error(self, message: str) -> None:
         with self.lock:
@@ -344,6 +376,10 @@ def make_handler(state: BridgeState, api_token: str | None) -> type[BaseHTTPRequ
                 return
             if parsed.path == "/status":
                 body = json.dumps(state.status(), ensure_ascii=False, indent=2).encode("utf-8")
+                self._send(200, body, "application/json; charset=utf-8")
+                return
+            if parsed.path == "/history":
+                body = json.dumps(state.history(), ensure_ascii=False, indent=2).encode("utf-8")
                 self._send(200, body, "application/json; charset=utf-8")
                 return
             if parsed.path == "/tips.csv":
