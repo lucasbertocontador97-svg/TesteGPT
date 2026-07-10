@@ -136,6 +136,11 @@ def _value_from(row: dict[str, Any], *names: str) -> str:
     return ""
 
 
+def _id_value_from(row: dict[str, Any], *names: str) -> str:
+    value = _value_from(row, *names)
+    return value if value else "0"
+
+
 def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -> dict[str, str] | None:
     event = _normalize_event_name(str(row.get("EventName") or row.get("event") or ""))
     selection = _normalize_name(str(row.get("SelectionName") or row.get("selection") or ""))
@@ -157,6 +162,9 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
         "MarketId": _value_from(row, "MarketId", "market_id", "ID do mercado"),
         "EventId": _value_from(row, "EventId", "event_id", "ID do Evento"),
         "SelectionName": selection,
+        "SelectionId": _id_value_from(row, "SelectionId", "selection_id", "ID da seleção", "ID da selecao", "ID da seleÃ§Ã£o"),
+        "MarketId": _id_value_from(row, "MarketId", "market_id", "ID do mercado"),
+        "EventId": _id_value_from(row, "EventId", "event_id", "ID do Evento"),
         "MarketName": market_name,
         "EventName": event,
         "MarketType": market_type,
@@ -309,6 +317,9 @@ class BridgeState:
             return False
         row["Provider"] = row["Provider"] or "TesteGPT"
         row["Handicap"] = row["Handicap"] or "0"
+        row["SelectionId"] = row["SelectionId"] or "0"
+        row["MarketId"] = row["MarketId"] or "0"
+        row["EventId"] = row["EventId"] or "0"
         row["BetType"] = (row["BetType"] or "BACK").upper()
         row["Size"] = row["Size"] or "0.58"
         row["Points"] = row["Points"] or "1"

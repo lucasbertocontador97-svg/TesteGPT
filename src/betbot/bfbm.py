@@ -104,6 +104,11 @@ def _default_start_time() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _id_or_zero(value: Any) -> str:
+    text = str(value or "").strip()
+    return text if text else "0"
+
+
 def _bfbm_clean_name(value: str) -> str:
     aliases = {
         "Nublense": "\u00d1ublense",
@@ -190,14 +195,14 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
     row = {
         "Provider": config.provider,
         "Handicap": "0",
-        "SelectionId": "",
-        "MarketId": "",
-        "EventId": "",
+        "SelectionId": _id_or_zero(alert.get("selection_id") or alert.get("SelectionId")),
+        "MarketId": _id_or_zero(alert.get("market_id") or alert.get("MarketId")),
+        "EventId": _id_or_zero(alert.get("betfair_event_id") or alert.get("event_id") or alert.get("EventId")),
         "SelectionName": market["SelectionName"],
         "MarketName": market["MarketName"],
         "EventName": event_name,
         "MarketType": market["MarketType"],
-        "StartTime": "",
+        "StartTime": str(alert.get("start_time") or alert.get("StartTime") or ""),
         "BetType": "BACK",
         "Price": price_text,
         "Size": stake_text,
@@ -315,9 +320,9 @@ def debug_lab_csv(config: BfbmConfig, event_name: str, mode: str) -> str:
     row = {
         "Provider": config.provider,
         "Handicap": "0",
-        "SelectionId": "",
-        "MarketId": "",
-        "EventId": "",
+        "SelectionId": "0",
+        "MarketId": "0",
+        "EventId": "0",
         "SelectionName": "Over 2.5 Goals",
         "MarketName": "Over/Under 2.5 Goals",
         "EventName": event_name,
