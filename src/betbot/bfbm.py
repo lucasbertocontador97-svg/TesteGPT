@@ -443,16 +443,16 @@ def fresh_match_odds_rich_csv(config: BfbmConfig, event_name: str, selection_nam
     row = {
         "Provider": config.provider,
         "Handicap": "0",
-        "SelectionName": selection_name,
-        "MarketName": "Match Odds",
-        "EventName": event_name,
+        "SelectionName": _bfbm_clean_name(selection_name),
+        "MarketName": "Resultado da partida",
+        "EventName": _bfbm_clean_event_name(event_name),
         "MarketType": "MATCH_ODDS",
         "BetType": "BACK",
-        "Size": f"{config.stake:.2f}",
+        "Size": "1.00",
         "Points": "1",
         "Price": "0",
         "MinPrice": f"{config.min_price:.2f}",
-        "MaxPrice": f"{config.max_price:.2f}",
+        "MaxPrice": "100.00",
         "BSP": "False",
     }
     return _custom_row_csv(row, BFBM_RICH_COLUMNS)
