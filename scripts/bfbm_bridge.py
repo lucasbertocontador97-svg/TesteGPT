@@ -121,7 +121,7 @@ def _normalize_corner_market(row: dict[str, Any], selection: str, market_name: s
     else:
         side = "Under" if re.search(r"\b(Menos|Under)\b", combined, re.IGNORECASE) else "Over"
     label = f"{line_value:g}"
-    return f"{side} {label} Corners", f"Over/Under {label} Corners", f"OVER_UNDER_{code}_CORNERS"
+    return f"{side} {label} Corners", "Corners Total", "COMBINED_TOTAL"
 
 
 def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -> dict[str, str] | None:
