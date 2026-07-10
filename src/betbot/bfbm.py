@@ -96,6 +96,10 @@ def _bfbm_event_aliases(event_name: str) -> list[str]:
     return [alias for alias in aliases if alias and alias != event_name and not (alias in seen or seen.add(alias))]
 
 
+def _bfbm_name_alias(value: str) -> str:
+    return value.replace("Nublense", "Ñublense").replace("O'Higgins", "OHiggins")
+
+
 def _default_start_time() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -210,10 +214,13 @@ def tips_full_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
 def tips_rich_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
     buffer = io.StringIO(newline="")
     rows = [row for alert in alerts if (row := alert_to_bfbm_row(alert, config))]
+    if any(row.get("MarketType") == "MATCH_ODDS" for row in rows):
+        rows = [row for row in rows if row.get("MarketType") == "MATCH_ODDS"]
     for row in list(rows):
         for alias in _bfbm_event_aliases(row.get("EventName", "")):
             alias_row = row.copy()
             alias_row["EventName"] = alias
+            alias_row["SelectionName"] = _bfbm_name_alias(alias_row.get("SelectionName", ""))
             rows.append(alias_row)
     writer = csv.DictWriter(buffer, fieldnames=BFBM_RICH_COLUMNS, extrasaction="ignore", quoting=csv.QUOTE_ALL)
     writer.writeheader()
