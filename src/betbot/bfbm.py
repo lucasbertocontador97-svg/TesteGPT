@@ -143,14 +143,13 @@ def _corner_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     line = _num(alert.get("line"))
     if line is None:
         return None
-    side = "Mais" if str(alert.get("selection", "")).lower() == "over" else "Menos"
     line_label = _line_text(line)
-    display_line = _bfbm_line_text(line)
     market_code = str(int(round(line * 10))).zfill(2)
+    side = "Over" if str(alert.get("selection", "")).lower() == "over" else "Under"
     return {
-        "MarketType": f"OVER_UNDER_{market_code}_CORNERS",
-        "MarketName": f"Mais/Menos de {display_line} Escanteios",
-        "SelectionName": f"{side} de {display_line} Escanteios",
+        "MarketType": f"OVER_UNDER_{market_code}",
+        "MarketName": f"Over/Under {line_label} Corners",
+        "SelectionName": f"{side} {line_label} Corners",
     }
 
 

@@ -87,6 +87,37 @@ def _normalize_event_name(value: str) -> str:
     return _normalize_name(value).replace(" v ", " x ")
 
 
+def _normalize_corner_market(row: dict[str, Any], selection: str, market_name: str, market_type: str) -> tuple[str, str, str]:
+    combined = " ".join(
+        [
+            selection,
+            market_name,
+            market_type,
+            str(row.get("line") or row.get("Line") or ""),
+        ]
+    )
+    if "Escanteio" not in combined and "Corner" not in combined and not market_type.endswith("_CORNERS"):
+        return selection, market_name, market_type
+    line_match = re.search(r"(\d+(?:[,.]\d+)?)", combined)
+    if not line_match:
+        return selection, market_name, market_type.replace("_CORNERS", "")
+    line = line_match.group(1).replace(",", ".")
+    try:
+        line_value = float(line)
+    except ValueError:
+        return selection, market_name, market_type.replace("_CORNERS", "")
+    code = str(int(round(line_value * 10))).zfill(2)
+    selection_source = selection or combined
+    if re.search(r"\b(Menos|Under)\b", selection_source, re.IGNORECASE):
+        side = "Under"
+    elif re.search(r"\b(Mais|Over)\b", selection_source, re.IGNORECASE):
+        side = "Over"
+    else:
+        side = "Under" if re.search(r"\b(Menos|Under)\b", combined, re.IGNORECASE) else "Over"
+    label = f"{line_value:g}"
+    return f"{side} {label} Corners", f"Over/Under {label} Corners", f"OVER_UNDER_{code}"
+
+
 def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -> dict[str, str] | None:
     event = _normalize_event_name(str(row.get("EventName") or row.get("event") or ""))
     selection = _normalize_name(str(row.get("SelectionName") or row.get("selection") or ""))
@@ -99,11 +130,13 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
     row_max = _float(str(row.get("MaxPrice") or row.get("max_price") or max_price), max_price)
     if row_max < row_min:
         row_max = max_price
+    market_name = str(row.get("MarketName") or row.get("market_name") or "Resultado da partida").strip()
+    selection, market_name, market_type = _normalize_corner_market(row, selection, market_name, market_type)
     return {
         "Provider": str(row.get("Provider") or row.get("provider") or "TesteGPT").strip(),
         "Handicap": str(row.get("Handicap") or row.get("handicap") or "0").strip(),
         "SelectionName": selection,
-        "MarketName": str(row.get("MarketName") or row.get("market_name") or "Resultado da partida").strip(),
+        "MarketName": market_name,
         "EventName": event,
         "MarketType": market_type,
         "BetType": str(row.get("BetType") or row.get("bet_type") or "BACK").upper(),
