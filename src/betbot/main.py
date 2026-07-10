@@ -14,7 +14,7 @@ from telegram.error import BadRequest, Conflict
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
-from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, tips_csv, tips_full_csv, tips_rich_csv
+from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -142,6 +142,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/fresh-match-rich.csv",
             "/bfbm/live-full.csv",
             "/bfbm/live-rich.csv",
+            "/bfbm/live-clean.csv",
             "/bfbm/debug-minimal.csv",
             "/bfbm/debug-event.csv",
             "/bfbm/lab.csv",
@@ -224,7 +225,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 created_count, events = asyncio.run(create_live_bfbm_tips(settings, 4))
                 body_text = (
                     f"created={created_count}\n"
-                    f"live_csv=/bfbm/live.csv?token={settings.bfbm_token or ''}\n"
+                    f"live_csv=/bfbm/live-clean.csv?token={settings.bfbm_token or ''}\n"
                     + "\n".join(f"- {event}" for event in events)
                     + "\n"
                 )
@@ -315,6 +316,8 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 body = tips_full_csv(alerts, config).encode("utf-8-sig")
             elif parsed.path == "/bfbm/live-rich.csv":
                 body = tips_rich_csv(alerts, config).encode("utf-8-sig")
+            elif parsed.path == "/bfbm/live-clean.csv":
+                body = tips_clean_match_odds_csv(alerts, config).encode("utf-8-sig")
             else:
                 body = tips_csv(alerts, config).encode("utf-8-sig")
         self.send_response(200)

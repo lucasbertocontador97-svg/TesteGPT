@@ -104,6 +104,14 @@ def _default_start_time() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _bfbm_clean_name(value: str) -> str:
+    return value.replace("Nublense", "\u00d1ublense").replace("O'Higgins", "OHiggins")
+
+
+def _bfbm_clean_event_name(event_name: str) -> str:
+    return _bfbm_clean_name(event_name.replace(" v ", " x "))
+
+
 def _goal_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     line = _num(alert.get("line"))
     if line is None:
@@ -184,7 +192,7 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
         "Price": price_text,
         "Size": stake_text,
         "Points": "1",
-        "MinPrice": "1.01" if is_match_odds else f"{config.min_price:.2f}",
+        "MinPrice": f"{config.min_price:.2f}",
         "MaxPrice": "100.00" if is_match_odds else f"{config.max_price:.2f}",
         "BSP": "False",
     }
@@ -227,6 +235,32 @@ def tips_rich_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
     for row in rows:
         if not row.get("Price"):
             row["Price"] = "0"
+        writer.writerow(row)
+    return buffer.getvalue()
+
+
+def tips_clean_match_odds_csv(alerts: list[dict[str, Any]], config: BfbmConfig, limit: int = 4) -> str:
+    buffer = io.StringIO(newline="")
+    rows: list[dict[str, str]] = []
+    seen_events: set[str] = set()
+    for alert in alerts:
+        row = alert_to_bfbm_row(alert, config)
+        if not row or row.get("MarketType") != "MATCH_ODDS":
+            continue
+        row["EventName"] = _bfbm_clean_event_name(row.get("EventName", ""))
+        row["SelectionName"] = _bfbm_clean_name(row.get("SelectionName", ""))
+        event_key = row["EventName"].casefold()
+        if not row["EventName"] or event_key in seen_events:
+            continue
+        seen_events.add(event_key)
+        if not row.get("Price"):
+            row["Price"] = "0"
+        rows.append(row)
+        if len(rows) >= limit:
+            break
+    writer = csv.DictWriter(buffer, fieldnames=BFBM_RICH_COLUMNS, extrasaction="ignore", quoting=csv.QUOTE_ALL)
+    writer.writeheader()
+    for row in rows:
         writer.writerow(row)
     return buffer.getvalue()
 
