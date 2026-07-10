@@ -281,6 +281,46 @@ async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, stora
     return snapshots
 
 
+async def create_live_bfbm_zero_zero_goal_tests(settings, count: int = 4) -> tuple[int, list[str]]:
+    http = HttpJsonClient()
+    storage = Storage(settings.database_path)
+    created: list[str] = []
+    try:
+        snapshots = await build_bfbm_totalcorner_snapshots(settings, http, storage)
+        catalog_rows = storage.bfbm_markets(15)
+        for game in snapshots:
+            if len(created) >= count:
+                break
+            if (game.score_home or 0) != 0 or (game.score_away or 0) != 0:
+                continue
+            if not find_bfbm_event_family_market(catalog_rows, f"{game.home} x {game.away}", "goals"):
+                continue
+            stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            alert_key = f"bfbm-force-00-over05|{game.home}|{game.away}|{stamp}"
+            decision = Decision(
+                True,
+                99,
+                "Mais gols",
+                "over",
+                "BFBM teste 0x0",
+                0.0,
+                0.5,
+                "TESTE FORCADO: jogo 0x0 ao vivo com mercado de gols detectado no BFBM; validar linha Mais/Menos de 0,5 Gols.",
+                "teste",
+                alert_key,
+                market_status="Teste BFBM: mercado de gols detectado.",
+            )
+            alert_id = storage.save_manual_alert(game, decision)
+            if alert_id:
+                created.append(f"{game.home} x {game.away} {game.score_home}x{game.score_away} {game.minute}'")
+        if not created:
+            return 0, ["Nenhum 0x0 ao vivo com mercado de gols no BFBM agora."]
+        return len(created), created
+    finally:
+        storage.close()
+        await http.close()
+
+
 class BfbmRequestHandler(BaseHTTPRequestHandler):
     def _check_bfbm_token(self, settings, parsed) -> bool:
         token = parse_qs(parsed.query).get("token", [""])[0]
@@ -342,6 +382,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/lab.csv",
             "/bfbm/create-test",
             "/bfbm/create-live-4",
+            "/bfbm/create-live-00-goals",
             "/bfbm/markets.json",
             "/bfbm/live-overlap.json",
             "/bfbm/notify-bet",
@@ -383,6 +424,27 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 body = json.dumps({"error": type(exc).__name__}, ensure_ascii=False).encode("utf-8")
                 self.send_response(500)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if parsed.path == "/bfbm/create-live-00-goals":
+            try:
+                created_count, events = asyncio.run(create_live_bfbm_zero_zero_goal_tests(settings, 4))
+                body_text = (
+                    f"created={created_count}\n"
+                    f"live_csv=/bfbm/live-full.csv?token={settings.bfbm_token or ''}\n"
+                    + "\n".join(f"- {event}" for event in events)
+                    + "\n"
+                )
+                body = body_text.encode("utf-8")
+                self.send_response(200)
+            except Exception as exc:
+                logger.exception("Erro ao criar teste 0x0 BFBM")
+                body = f"error={type(exc).__name__}\n".encode("utf-8")
+                self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
