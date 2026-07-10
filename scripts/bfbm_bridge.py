@@ -18,10 +18,14 @@ from typing import Any
 RICH_COLUMNS = [
     "Provider",
     "Handicap",
+    "SelectionId",
+    "MarketId",
+    "EventId",
     "SelectionName",
     "MarketName",
     "EventName",
     "MarketType",
+    "StartTime",
     "BetType",
     "Size",
     "Points",
@@ -124,6 +128,29 @@ def _normalize_corner_market(row: dict[str, Any], selection: str, market_name: s
     return f"{side} {label} Corners", "Corners Total", "COMBINED_TOTAL"
 
 
+def _value_from(row: dict[str, Any], *names: str) -> str:
+    for name in names:
+        value = row.get(name)
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
+def _has_betfair_ids(row: dict[str, str]) -> bool:
+    return bool(row.get("SelectionId") and row.get("MarketId") and row.get("EventId"))
+
+
+def _is_corner_row(row: dict[str, str]) -> bool:
+    combined = " ".join(
+        [
+            row.get("SelectionName", ""),
+            row.get("MarketName", ""),
+            row.get("MarketType", ""),
+        ]
+    )
+    return bool(re.search(r"corner|escanteio|COMBINED_TOTAL", combined, re.IGNORECASE))
+
+
 def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -> dict[str, str] | None:
     event = _normalize_event_name(str(row.get("EventName") or row.get("event") or ""))
     selection = _normalize_name(str(row.get("SelectionName") or row.get("selection") or ""))
@@ -141,10 +168,14 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
     return {
         "Provider": str(row.get("Provider") or row.get("provider") or "TesteGPT").strip(),
         "Handicap": str(row.get("Handicap") or row.get("handicap") or "0").strip(),
+        "SelectionId": _value_from(row, "SelectionId", "selection_id", "ID da seleção", "ID da selecao"),
+        "MarketId": _value_from(row, "MarketId", "market_id", "ID do mercado"),
+        "EventId": _value_from(row, "EventId", "event_id", "ID do Evento"),
         "SelectionName": selection,
         "MarketName": market_name,
         "EventName": event,
         "MarketType": market_type,
+        "StartTime": _value_from(row, "StartTime", "start_time", "Hora de início", "Hora de inicio"),
         "BetType": str(row.get("BetType") or row.get("bet_type") or "BACK").upper(),
         "Size": str(row.get("Size") or row.get("stake") or row.get("size") or "1.00").strip(),
         "Points": str(row.get("Points") or row.get("points") or "1").strip(),
@@ -220,10 +251,11 @@ class BridgeState:
         visible: list[dict[str, str]] = []
         now_ts = _now_ts()
         for row in rows:
-            normalized = _normalize_row(row, min_price=self.min_price, max_price=self.max_price)
-            if normalized:
-                normalized["__last_seen"] = str(row.get("__last_seen") or now_ts)
-                row = normalized
+            if row.get("__raw") != "1":
+                normalized = _normalize_row(row, min_price=self.min_price, max_price=self.max_price)
+                if normalized:
+                    normalized["__last_seen"] = str(row.get("__last_seen") or now_ts)
+                    row = normalized
             row.setdefault("__last_seen", str(now_ts))
             last_seen = _float(str(row.get("__last_seen") or now_ts), now_ts)
             if now_ts - last_seen <= self.tip_keep_seconds:
@@ -286,6 +318,29 @@ class BridgeState:
         self.save()
         return True
 
+    def add_raw_row(self, raw: dict[str, Any]) -> bool:
+        row = {column: str(raw.get(column, "") or "") for column in RICH_COLUMNS}
+        if not row["EventName"] or not row["SelectionName"] or not row["MarketType"]:
+            return False
+        row["Provider"] = row["Provider"] or "TesteGPT"
+        row["Handicap"] = row["Handicap"] or "0"
+        row["BetType"] = (row["BetType"] or "BACK").upper()
+        row["Size"] = row["Size"] or "0.58"
+        row["Points"] = row["Points"] or "1"
+        row["Price"] = row["Price"] or "0"
+        row["MinPrice"] = row["MinPrice"] or f"{self.min_price:.2f}"
+        row["MaxPrice"] = row["MaxPrice"] or f"{self.max_price:.2f}"
+        row["BSP"] = row["BSP"] or "False"
+        row["__last_seen"] = str(_now_ts())
+        row["__raw"] = "1"
+        with self.lock:
+            key = self._row_key(row)
+            self.rows = [existing for existing in self.rows if self._row_key(existing) != key]
+            self.rows.insert(0, row)
+            self.rows = self.rows[: self.max_tips]
+        self.save()
+        return True
+
     def clear_rows(self) -> None:
         with self.lock:
             self.rows = []
@@ -343,6 +398,8 @@ def parse_source_csv(text: str, *, min_price: float, max_price: float) -> list[d
     for raw in csv.DictReader(text.splitlines()):
         row = _normalize_row(raw, min_price=min_price, max_price=max_price)
         if row:
+            if _is_corner_row(row) and not _has_betfair_ids(row):
+                continue
             rows.append(row)
     return rows
 
@@ -435,7 +492,7 @@ def make_handler(state: BridgeState, api_token: str | None) -> type[BaseHTTPRequ
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path not in {"/tip", "/clear"}:
+            if parsed.path not in {"/tip", "/raw-tip", "/clear"}:
                 self._send(404, b"not found\n", "text/plain; charset=utf-8")
                 return
             if not self._authorized():
@@ -451,7 +508,8 @@ def make_handler(state: BridgeState, api_token: str | None) -> type[BaseHTTPRequ
             except json.JSONDecodeError:
                 self._send(400, b"invalid json\n", "text/plain; charset=utf-8")
                 return
-            if state.add_row(payload):
+            accepted = state.add_raw_row(payload) if parsed.path == "/raw-tip" else state.add_row(payload)
+            if accepted:
                 self._send(200, b"accepted\n", "text/plain; charset=utf-8")
                 return
             self._send(400, b"invalid tip\n", "text/plain; charset=utf-8")
