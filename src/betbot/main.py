@@ -148,6 +148,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/lab.csv",
             "/bfbm/create-test",
             "/bfbm/create-live-4",
+            "/bfbm/notify-bet",
             "/health",
         }:
             self.send_error(404)
@@ -163,6 +164,43 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         token = parse_qs(parsed.query).get("token", [""])[0]
         if settings.bfbm_token and token != settings.bfbm_token:
             self.send_error(403)
+            return
+        if parsed.path == "/bfbm/notify-bet":
+            query = parse_qs(parsed.query)
+            bet_id = query.get("bet_id", [""])[0].strip()
+            size_matched = query.get("size_matched", [""])[0].strip()
+            success = query.get("success", [""])[0].strip()
+            strategy = query.get("strategy", [""])[0].strip()
+            raw_line = query.get("line", [""])[0].strip()
+            matched = False
+            try:
+                matched = float(size_matched.replace(",", ".") or "0") > 0
+            except ValueError:
+                matched = False
+            title = "\u2705 APOSTA FEITA NO BFBM" if matched else "\u26a0\ufe0f APOSTA ENVIADA AO BFBM"
+            text = (
+                f"{title}\n\n"
+                f"Bet ID: {bet_id or '-'}\n"
+                f"Matched: {size_matched or '0'}\n"
+                f"Status: {success or '-'}\n"
+                f"Estrategia: {strategy or '-'}"
+            )
+            if raw_line:
+                text += f"\n\nLog: {raw_line[:500]}"
+            try:
+                require_telegram_settings(settings)
+                asyncio.run(send_message(settings.telegram_bot_token, settings.telegram_chat_id, text))
+                body = b"sent\n"
+                self.send_response(200)
+            except Exception as exc:
+                logger.exception("Erro ao notificar aposta BFBM")
+                body = f"error={type(exc).__name__}\n".encode("utf-8")
+                self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if parsed.path == "/bfbm/create-test":
             query = parse_qs(parsed.query)
