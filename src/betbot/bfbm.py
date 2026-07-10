@@ -76,6 +76,26 @@ def _event_name(alert: dict[str, Any]) -> str:
     return home or away
 
 
+def _bfbm_event_aliases(event_name: str) -> list[str]:
+    aliases: list[str] = []
+    if " v " in event_name:
+        aliases.append(event_name.replace(" v ", " x "))
+    for candidate in list([event_name, *aliases]):
+        variants = {candidate}
+        if "Nublense" in candidate:
+            variants.add(candidate.replace("Nublense", "Ñublense"))
+        if "O'Higgins" in candidate:
+            variants.add(candidate.replace("O'Higgins", "OHiggins"))
+        for variant in list(variants):
+            if "Nublense" in variant and "O'Higgins" in variant:
+                variants.add(variant.replace("Nublense", "Ñublense"))
+                variants.add(variant.replace("O'Higgins", "OHiggins"))
+                variants.add(variant.replace("Nublense", "Ñublense").replace("O'Higgins", "OHiggins"))
+        aliases.extend(variants)
+    seen: set[str] = set()
+    return [alias for alias in aliases if alias and alias != event_name and not (alias in seen or seen.add(alias))]
+
+
 def _default_start_time() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -176,6 +196,11 @@ def tips_full_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
 def tips_rich_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
     buffer = io.StringIO(newline="")
     rows = [row for alert in alerts if (row := alert_to_bfbm_row(alert, config))]
+    for row in list(rows):
+        for alias in _bfbm_event_aliases(row.get("EventName", "")):
+            alias_row = row.copy()
+            alias_row["EventName"] = alias
+            rows.append(alias_row)
     writer = csv.DictWriter(buffer, fieldnames=BFBM_RICH_COLUMNS, extrasaction="ignore", quoting=csv.QUOTE_ALL)
     writer.writeheader()
     for row in rows:
