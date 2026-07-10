@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sys
 import threading
@@ -15,6 +16,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
 from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
+from .bfbm_markets import payload_to_markets
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -128,6 +130,46 @@ async def create_live_bfbm_tips(settings, count: int = 4) -> tuple[int, list[str
 
 
 class BfbmRequestHandler(BaseHTTPRequestHandler):
+    def _check_bfbm_token(self, settings, parsed) -> bool:
+        token = parse_qs(parsed.query).get("token", [""])[0]
+        if settings.bfbm_token and token != settings.bfbm_token:
+            self.send_error(403)
+            return False
+        return True
+
+    def do_POST(self) -> None:
+        settings = load_settings()
+        parsed = urlparse(self.path)
+        if parsed.path != "/bfbm/markets/snapshot":
+            self.send_error(404)
+            return
+        if not settings.bfbm_export:
+            self.send_error(404, "BFBM export disabled")
+            return
+        if not self._check_bfbm_token(settings, parsed):
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(min(length, 5_000_000))
+            payload = json.loads(raw.decode("utf-8"))
+            rows = payload_to_markets(payload if isinstance(payload, dict) else {})
+            storage = Storage(settings.database_path)
+            try:
+                count = storage.replace_bfbm_markets(rows)
+            finally:
+                storage.close()
+            body = f"ok markets={count}\n".encode("utf-8")
+            self.send_response(200)
+        except Exception as exc:
+            logger.exception("Erro ao receber snapshot BFBM")
+            body = f"error={type(exc).__name__}\n".encode("utf-8")
+            self.send_response(500)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self) -> None:
         settings = load_settings()
         parsed = urlparse(self.path)
@@ -148,6 +190,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/lab.csv",
             "/bfbm/create-test",
             "/bfbm/create-live-4",
+            "/bfbm/markets.json",
             "/bfbm/notify-bet",
             "/health",
         }:
@@ -161,9 +204,21 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         if not settings.bfbm_export:
             self.send_error(404, "BFBM export disabled")
             return
-        token = parse_qs(parsed.query).get("token", [""])[0]
-        if settings.bfbm_token and token != settings.bfbm_token:
-            self.send_error(403)
+        if not self._check_bfbm_token(settings, parsed):
+            return
+        if parsed.path == "/bfbm/markets.json":
+            storage = Storage(settings.database_path)
+            try:
+                rows = storage.bfbm_markets(15)
+            finally:
+                storage.close()
+            body = json.dumps({"markets": rows}, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if parsed.path == "/bfbm/notify-bet":
             query = parse_qs(parsed.query)
@@ -348,12 +403,13 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             storage = Storage(settings.database_path)
             try:
                 alerts = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes)
+                catalog_rows = storage.bfbm_markets(15)
             finally:
                 storage.close()
             if parsed.path == "/bfbm/live-full.csv":
-                body = tips_full_csv(alerts, config).encode("utf-8-sig")
+                body = tips_full_csv(alerts, config, catalog_rows).encode("utf-8-sig")
             elif parsed.path == "/bfbm/live-rich.csv":
-                body = tips_rich_csv(alerts, config).encode("utf-8-sig")
+                body = tips_rich_csv(alerts, config, catalog_rows).encode("utf-8-sig")
             elif parsed.path == "/bfbm/live-clean.csv":
                 body = tips_clean_match_odds_csv(alerts, config).encode("utf-8-sig")
             else:

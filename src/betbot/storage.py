@@ -50,6 +50,21 @@ class Storage:
                 betfair_start_time text
             );
             create index if not exists idx_alerts_status on alerts(status);
+            create table if not exists bfbm_markets (
+                id integer primary key autoincrement,
+                captured_at datetime default current_timestamp,
+                event_name text not null,
+                market_name text not null,
+                status text,
+                start_time text,
+                live_score text,
+                live_time text,
+                favorite text,
+                winner text,
+                total_matched text,
+                raw_json text
+            );
+            create index if not exists idx_bfbm_markets_captured_at on bfbm_markets(captured_at);
             """
         )
         columns = {row["name"] for row in self.conn.execute("pragma table_info(alerts)").fetchall()}
@@ -60,6 +75,47 @@ class Storage:
                 self.conn.execute(f"alter table alerts add column {column} text")
         self.conn.execute("create index if not exists idx_alerts_user_action on alerts(user_action)")
         self.conn.commit()
+
+    def replace_bfbm_markets(self, rows: list[dict[str, Any]]) -> int:
+        self.conn.execute("delete from bfbm_markets")
+        if rows:
+            self.conn.executemany(
+                """
+                insert into bfbm_markets (
+                    event_name, market_name, status, start_time, live_score, live_time,
+                    favorite, winner, total_matched, raw_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        row.get("event_name", ""),
+                        row.get("market_name", ""),
+                        row.get("status", ""),
+                        row.get("start_time", ""),
+                        row.get("live_score", ""),
+                        row.get("live_time", ""),
+                        row.get("favorite", ""),
+                        row.get("winner", ""),
+                        row.get("total_matched", ""),
+                        row.get("raw_json", "{}"),
+                    )
+                    for row in rows
+                ],
+            )
+        self.conn.commit()
+        return len(rows)
+
+    def bfbm_markets(self, max_age_minutes: int = 15) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            select *
+            from bfbm_markets
+            where captured_at >= datetime('now', ?)
+            order by event_name, market_name
+            """,
+            (f"-{max(1, max_age_minutes)} minutes",),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def seen_alert(self, alert_key: str) -> bool:
         row = self.conn.execute("select 1 from alerts where alert_key = ?", (alert_key,)).fetchone()

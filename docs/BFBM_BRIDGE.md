@@ -49,3 +49,21 @@ http://127.0.0.1:8787/status
 - Estrategia corrigida iniciada.
 - Mercados carregados no BFBM.
 - BFBM apontando para `http://127.0.0.1:8787/tips.csv`.
+
+## Scanner de mercados
+
+Para o bot saber quais mercados o BFBM realmente esta vendo, mantenha um export dos mercados visiveis em:
+
+```text
+C:\Users\datab\OneDrive\Desktop\................csv
+```
+
+Depois rode em outro terminal:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_bfbm_market_scanner.ps1
+```
+
+O scanner le esse CSV a cada poucos segundos, salva um snapshot local e envia para o Railway em `/bfbm/markets/snapshot`. O feed `/bfbm/live-full.csv` usa esse catalogo para ajustar nomes de evento, mercado e selecao para o mesmo texto que o BFBM usa.
+
+O scanner nao decide odds. Ele apenas confirma que o mercado existe no BFBM; a odd minima continua protegida pelo `MinPrice` do CSV e pela estrategia do BFBM.

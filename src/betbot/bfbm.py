@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from .bfbm_markets import find_bfbm_market, map_selection_to_event, market_family, market_line
+
 
 BFBM_COLUMNS = [
     "Provider",
@@ -166,8 +168,8 @@ def _corner_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     side = "Over" if str(alert.get("selection", "")).lower() == "over" else "Under"
     return {
         "MarketType": "COMBINED_TOTAL",
-        "MarketName": "Corners Total",
-        "SelectionName": f"{side} {line_label} Corners",
+        "MarketName": f"Mais/Menos de {_bfbm_line_text(line)} Escanteios",
+        "SelectionName": f"{'Mais' if side == 'Over' else 'Menos'} de {_bfbm_line_text(line)} escanteios",
     }
 
 
@@ -226,6 +228,39 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
     return row
 
 
+def _selection_for_catalog_market(row: dict[str, str], market: dict[str, Any]) -> str:
+    family = market_family(market.get("market_name", ""))
+    selection = row.get("SelectionName", "")
+    if family == "match_odds":
+        return map_selection_to_event(selection, str(market.get("event_name") or ""))
+    if family in {"goals", "corners"}:
+        line = market_line(str(market.get("market_name") or "")) or _num(row.get("line"))
+        line_text = _bfbm_line_text(line) if line is not None else ""
+        original = selection.lower()
+        side = "Menos" if "menos" in original or "under" in original else "Mais"
+        unit = "escanteios" if family == "corners" else "gols"
+        return f"{side} de {line_text} {unit}".strip()
+    return selection
+
+
+def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[str, Any]]) -> dict[str, str]:
+    if not catalog_rows:
+        return row
+    family = market_family(row.get("MarketName", ""))
+    desired_line = market_line(row.get("MarketName", ""))
+    match = find_bfbm_market(catalog_rows, row.get("EventName", ""), family, desired_line)
+    if not match:
+        return row
+    enriched = row.copy()
+    enriched["EventName"] = str(match.get("event_name") or row.get("EventName", ""))
+    enriched["MarketName"] = str(match.get("market_name") or row.get("MarketName", ""))
+    enriched["SelectionName"] = _selection_for_catalog_market(enriched, match)
+    start_time = str(match.get("start_time") or "")
+    if len(start_time) >= 10 and start_time[:4].isdigit():
+        enriched["StartTime"] = str(match.get("start_time"))
+    return enriched
+
+
 def tips_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
     buffer = io.StringIO(newline="")
     rows = [row for alert in alerts if (row := alert_to_bfbm_row(alert, config))]
@@ -236,9 +271,11 @@ def tips_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
     return buffer.getvalue()
 
 
-def tips_full_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
+def tips_full_csv(alerts: list[dict[str, Any]], config: BfbmConfig, catalog_rows: list[dict[str, Any]] | None = None) -> str:
     buffer = io.StringIO(newline="")
     rows = [row for alert in alerts if (row := alert_to_bfbm_row(alert, config))]
+    if catalog_rows:
+        rows = [enrich_row_from_bfbm_catalog(row, catalog_rows) for row in rows]
     writer = csv.DictWriter(buffer, fieldnames=BFBM_COLUMNS, extrasaction="ignore")
     writer.writeheader()
     for row in rows:
@@ -246,9 +283,11 @@ def tips_full_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
     return buffer.getvalue()
 
 
-def tips_rich_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
+def tips_rich_csv(alerts: list[dict[str, Any]], config: BfbmConfig, catalog_rows: list[dict[str, Any]] | None = None) -> str:
     buffer = io.StringIO(newline="")
     rows = [row for alert in alerts if (row := alert_to_bfbm_row(alert, config))]
+    if catalog_rows:
+        rows = [enrich_row_from_bfbm_catalog(row, catalog_rows) for row in rows]
     if any(row.get("MarketType") == "MATCH_ODDS" for row in rows):
         rows = [row for row in rows if row.get("MarketType") == "MATCH_ODDS"]
     for row in list(rows):
