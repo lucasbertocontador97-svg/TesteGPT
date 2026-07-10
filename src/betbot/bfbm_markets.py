@@ -90,9 +90,18 @@ def parse_exported_markets_csv(text: str) -> list[BfbmMarket]:
     return markets
 
 
-def markets_to_payload(markets: list[BfbmMarket]) -> dict[str, Any]:
+def markets_to_payload(
+    markets: list[BfbmMarket],
+    *,
+    source_path: str = "",
+    source_modified_at: str = "",
+    source_age_seconds: float | None = None,
+) -> dict[str, Any]:
     return {
         "captured_at": datetime.now(timezone.utc).isoformat(),
+        "source_path": source_path,
+        "source_modified_at": source_modified_at,
+        "source_age_seconds": source_age_seconds,
         "markets": [
             {
                 "event_name": item.event_name,
@@ -115,6 +124,12 @@ def payload_to_markets(payload: dict[str, Any]) -> list[dict[str, Any]]:
     rows = payload.get("markets")
     if not isinstance(rows, list):
         return []
+    source_path = str(payload.get("source_path") or "")
+    source_modified_at = str(payload.get("source_modified_at") or "")
+    try:
+        source_age_seconds = float(payload.get("source_age_seconds"))
+    except (TypeError, ValueError):
+        source_age_seconds = None
     parsed: list[dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -135,6 +150,9 @@ def payload_to_markets(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "winner": str(row.get("winner") or "").strip(),
                 "total_matched": str(row.get("total_matched") or "").strip(),
                 "raw_json": json.dumps(row.get("raw") or {}, ensure_ascii=False),
+                "source_path": source_path,
+                "source_modified_at": source_modified_at,
+                "source_age_seconds": source_age_seconds,
             }
         )
     return parsed

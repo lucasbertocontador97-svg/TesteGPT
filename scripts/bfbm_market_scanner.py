@@ -6,6 +6,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -41,7 +42,15 @@ def post_json(url: str, payload: dict, timeout: int = 15) -> str:
 def scan_once(export_path: Path, snapshot_path: Path, post_url: str | None) -> tuple[int, str]:
     text = read_text(export_path)
     markets = parse_exported_markets_csv(text)
-    payload = markets_to_payload(markets)
+    stat = export_path.stat()
+    modified_at = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+    age_seconds = max(0.0, time.time() - stat.st_mtime)
+    payload = markets_to_payload(
+        markets,
+        source_path=str(export_path),
+        source_modified_at=modified_at,
+        source_age_seconds=age_seconds,
+    )
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     result = "local-only"

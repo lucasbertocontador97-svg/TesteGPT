@@ -62,7 +62,10 @@ class Storage:
                 favorite text,
                 winner text,
                 total_matched text,
-                raw_json text
+                raw_json text,
+                source_path text,
+                source_modified_at text,
+                source_age_seconds real
             );
             create index if not exists idx_bfbm_markets_captured_at on bfbm_markets(captured_at);
             """
@@ -74,6 +77,14 @@ class Storage:
             if column not in columns:
                 self.conn.execute(f"alter table alerts add column {column} text")
         self.conn.execute("create index if not exists idx_alerts_user_action on alerts(user_action)")
+        market_columns = {row["name"] for row in self.conn.execute("pragma table_info(bfbm_markets)").fetchall()}
+        for column, ddl_type in (
+            ("source_path", "text"),
+            ("source_modified_at", "text"),
+            ("source_age_seconds", "real"),
+        ):
+            if column not in market_columns:
+                self.conn.execute(f"alter table bfbm_markets add column {column} {ddl_type}")
         self.conn.commit()
 
     def replace_bfbm_markets(self, rows: list[dict[str, Any]]) -> int:
@@ -83,8 +94,9 @@ class Storage:
                 """
                 insert into bfbm_markets (
                     event_name, market_name, status, start_time, live_score, live_time,
-                    favorite, winner, total_matched, raw_json
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    favorite, winner, total_matched, raw_json, source_path,
+                    source_modified_at, source_age_seconds
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -98,6 +110,9 @@ class Storage:
                         row.get("winner", ""),
                         row.get("total_matched", ""),
                         row.get("raw_json", "{}"),
+                        row.get("source_path", ""),
+                        row.get("source_modified_at", ""),
+                        row.get("source_age_seconds"),
                     )
                     for row in rows
                 ],
@@ -105,15 +120,16 @@ class Storage:
         self.conn.commit()
         return len(rows)
 
-    def bfbm_markets(self, max_age_minutes: int = 15) -> list[dict[str, Any]]:
+    def bfbm_markets(self, max_age_minutes: int = 15, max_source_age_seconds: int = 45) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
             select *
             from bfbm_markets
             where captured_at >= datetime('now', ?)
+              and coalesce(source_age_seconds, 999999) <= ?
             order by event_name, market_name
             """,
-            (f"-{max(1, max_age_minutes)} minutes",),
+            (f"-{max(1, max_age_minutes)} minutes", max(1, max_source_age_seconds)),
         ).fetchall()
         return [dict(row) for row in rows]
 
