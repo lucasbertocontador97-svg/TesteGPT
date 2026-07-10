@@ -16,7 +16,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
 from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
-from .bfbm_markets import _event_score, market_family, payload_to_markets
+from .bfbm_markets import _event_score, find_bfbm_market, market_family, payload_to_markets
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -204,6 +204,24 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
             "bfbm_markets_count": len(scored_rows),
             "bfbm_markets": markets,
         }
+        stats = compact_totalcorner_statistics(match)
+        signal = evaluate_game(
+            minute=item["minute"],
+            score_home=_tc_int(match, "hg"),
+            score_away=_tc_int(match, "ag"),
+            stats=stats,
+            min_confidence=settings.min_confidence,
+        )
+        item["signal"] = {
+            "approved": signal.approved,
+            "market_family": signal.market_family,
+            "selection": signal.selection,
+            "line": signal.line,
+            "probability": signal.probability,
+            "score": signal.score,
+            "strategy": signal.strategy,
+            "reason": signal.reason,
+        }
         if scored_rows:
             matched.append(item)
         else:
@@ -220,6 +238,40 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
         "matched": matched[:30],
         "unmatched": unmatched[:30],
     }
+
+
+async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, storage: Storage) -> list[GameSnapshot]:
+    if not settings.bfbm_export or not settings.totalcorner_token:
+        return []
+    catalog_rows = storage.bfbm_markets(15)
+    if not catalog_rows:
+        return []
+    live = await load_totalcorner_live(settings, http)
+    snapshots: list[GameSnapshot] = []
+    for index, match in enumerate(live):
+        event_label = _tc_event_label(match)
+        if not any(_event_score(event_label, str(row.get("event_name") or "")) >= 75 for row in catalog_rows):
+            continue
+        stats = compact_totalcorner_statistics(match)
+        if not has_actionable_stats(stats):
+            continue
+        match_id = str(match.get("id") or match.get("mid") or index)
+        snapshots.append(
+            GameSnapshot(
+                event_id=f"tc-bfbm-{match_id}",
+                fixture_id=None,
+                league=str(match.get("l") or "TotalCorner Live"),
+                home=str(match.get("h") or ""),
+                away=str(match.get("a") or ""),
+                minute=_tc_int(match, "status"),
+                score_home=_tc_int(match, "hg"),
+                score_away=_tc_int(match, "ag"),
+                stats=stats,
+                markets=[],
+                totalcorner_match=match,
+            )
+        )
+    return snapshots
 
 
 class BfbmRequestHandler(BaseHTTPRequestHandler):
@@ -754,9 +806,17 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
         api_football = ApiFootballClient(settings.api_football_key, http)
         sent = 0
         snapshots = await build_snapshots(settings, odds_api, api_football)
+        bfbm_snapshots = await build_bfbm_totalcorner_snapshots(settings, http, storage)
+        if bfbm_snapshots:
+            existing_keys = {f"{game.home.casefold()} x {game.away.casefold()}" for game in snapshots}
+            for game in bfbm_snapshots:
+                key = f"{game.home.casefold()} x {game.away.casefold()}"
+                if key not in existing_keys:
+                    snapshots.append(game)
+                    existing_keys.add(key)
         odds_payloads: dict[str, dict] = {}
         if settings.odds_use_multi:
-            event_ids = [game.event_id for game in snapshots if game.event_id]
+            event_ids = [game.event_id for game in snapshots if game.event_id and not str(game.event_id).startswith("tc-bfbm-")]
             for index in range(0, len(event_ids), 10):
                 chunk = event_ids[index : index + 10]
                 try:
@@ -786,6 +846,24 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
             if not math_signal.approved:
                 logger.info("Motor matematico bloqueou %s x %s: %s", game.home, game.away, math_signal.reason)
                 continue
+            bfbm_source = str(game.event_id or "").startswith("tc-bfbm-")
+            if bfbm_source:
+                catalog_rows = storage.bfbm_markets(15)
+                bfbm_market = find_bfbm_market(
+                    catalog_rows,
+                    f"{game.home} x {game.away}",
+                    math_signal.market_family,
+                    math_signal.line,
+                )
+                if not bfbm_market:
+                    logger.info(
+                        "BFBM bloqueou %s x %s: mercado %s linha %s nao existe no catalogo.",
+                        game.home,
+                        game.away,
+                        math_signal.market_family,
+                        math_signal.line,
+                    )
+                    continue
             idea = await suggest_market_without_odds(
                 game,
                 api_key=settings.openai_api_key,
@@ -810,7 +888,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     idea.reason,
                 )
             odds_payload = None
-            if game.event_id:
+            if game.event_id and not bfbm_source:
                 odds_payload = odds_payloads.get(game.event_id)
                 if odds_payload is None:
                     try:
