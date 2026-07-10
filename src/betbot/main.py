@@ -16,7 +16,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
 from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
-from .bfbm_markets import _event_score, find_bfbm_market, market_family, payload_to_markets
+from .bfbm_markets import _event_score, find_bfbm_market, market_family, market_line, payload_to_markets
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -53,6 +53,25 @@ def verified_alert_key(game: GameSnapshot, market_family: str, selection: str, l
 
 def odds_alert_key(game: GameSnapshot, market_family: str, selection: str, line: float | None) -> str:
     return f"odds|{game.fixture_id or game.event_id}|{market_family}|{selection}|{line}"
+
+
+def bfbm_available_market_specs(catalog_rows: list[dict], event_name: str, min_score: int = 55) -> list[tuple[str, float | None]]:
+    specs: list[tuple[str, float | None]] = []
+    seen: set[tuple[str, float | None]] = set()
+    for row in catalog_rows:
+        status = str(row.get("status") or "").casefold()
+        if "closed" in status or "fechado" in status:
+            continue
+        if _event_score(event_name, str(row.get("event_name") or "")) < min_score:
+            continue
+        family = market_family(str(row.get("market_name") or ""))
+        line = market_line(str(row.get("market_name") or ""))
+        key = (family, line)
+        if key in seen:
+            continue
+        seen.add(key)
+        specs.append(key)
+    return specs
 
 
 def _tc_int(match: dict, key: str, default: int = 0) -> int:
@@ -211,6 +230,7 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
             score_away=_tc_int(match, "ag"),
             stats=stats,
             min_confidence=settings.min_confidence,
+            available_markets=bfbm_available_market_specs(active_catalog, event_label, 75),
         )
         item["signal"] = {
             "approved": signal.approved,
@@ -897,6 +917,13 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
             if not has_actionable_stats(game.stats):
                 logger.info("Sem estatisticas suficientes para %s x %s.", game.home, game.away)
                 continue
+            bfbm_source = str(game.event_id or "").startswith("tc-bfbm-")
+            bfbm_catalog_rows = storage.bfbm_markets(15) if bfbm_source else []
+            bfbm_available_markets = (
+                bfbm_available_market_specs(bfbm_catalog_rows, f"{game.home} x {game.away}")
+                if bfbm_source
+                else None
+            )
             required_confidence = settings.min_confidence
             if is_high_variance_match(game.league, game.home, game.away):
                 required_confidence = max(required_confidence, 85)
@@ -908,15 +935,14 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 score_away=game.score_away,
                 stats=game.stats,
                 min_confidence=required_confidence,
+                available_markets=bfbm_available_markets,
             )
             if not math_signal.approved:
                 logger.info("Motor matematico bloqueou %s x %s: %s", game.home, game.away, math_signal.reason)
                 continue
-            bfbm_source = str(game.event_id or "").startswith("tc-bfbm-")
             if bfbm_source:
-                catalog_rows = storage.bfbm_markets(15)
                 bfbm_market = find_bfbm_market(
-                    catalog_rows,
+                    bfbm_catalog_rows,
                     f"{game.home} x {game.away}",
                     math_signal.market_family,
                     math_signal.line,

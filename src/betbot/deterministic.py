@@ -231,6 +231,19 @@ def _candidate_priority(signal: DeterministicSignal) -> int:
     return 1
 
 
+def _candidate_is_available(signal: DeterministicSignal, available_markets: list[tuple[str, float | None]] | None) -> bool:
+    if available_markets is None:
+        return True
+    for family, line in available_markets:
+        if family != signal.market_family:
+            continue
+        if line is None or signal.line is None:
+            return line == signal.line
+        if abs(line - signal.line) <= 0.01:
+            return True
+    return False
+
+
 def evaluate_game(
     *,
     minute: int | None,
@@ -238,6 +251,7 @@ def evaluate_game(
     score_away: int | None,
     stats: dict[str, Any],
     min_confidence: int,
+    available_markets: list[tuple[str, float | None]] | None = None,
 ) -> DeterministicSignal:
     if minute is None or score_home is None or score_away is None:
         return DeterministicSignal(False, "none", "none", None, 0, 0, 0, "Minuto ou placar indisponivel.", "blocked")
@@ -379,6 +393,24 @@ def evaluate_game(
             0,
             f"Nenhum mercado passou nos thresholds matematicos. Chutes {total_shots:g}, no gol {shots_on:g}, escanteios {corners:g}, {pressure_label}.",
             "no_signal",
+        )
+
+    candidates = [
+        candidate
+        for candidate in candidates
+        if _candidate_is_available(candidate, available_markets)
+    ]
+    if not candidates:
+        return DeterministicSignal(
+            False,
+            "none",
+            "none",
+            None,
+            0,
+            0,
+            0,
+            "Sinais matematicos existem, mas nenhum bate com mercado/linha disponivel no BFBM.",
+            "no_bfbm_market",
         )
 
     return sorted(candidates, key=lambda item: (_candidate_priority(item), item.score, item.probability), reverse=True)[0]
