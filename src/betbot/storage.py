@@ -130,7 +130,7 @@ class Storage:
         self.conn.commit()
         return len(rows)
 
-    def bfbm_markets(self, max_age_minutes: int = 15, max_source_age_seconds: int = 45) -> list[dict[str, Any]]:
+    def bfbm_markets(self, max_age_minutes: int = 15, max_source_age_seconds: int = 7 * 24 * 60 * 60) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
             select *

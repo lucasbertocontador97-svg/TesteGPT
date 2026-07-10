@@ -55,8 +55,8 @@ http://127.0.0.1:8787/status
 Para o bot saber quais mercados o BFBM realmente esta vendo, o PC local precisa manter um export dos mercados em:
 
 ```text
-C:\Users\datab\OneDrive\Desktop\EXPORTAR DADOS VISIVEIS.csv
-C:\Users\datab\OneDrive\Desktop\EXPORTAR MERCADOS.csv
+C:\Users\datab\TesteGPT-BFBM-Mercados\EXPORTAR DADOS VISIVEIS.csv
+C:\Users\datab\TesteGPT-BFBM-Mercados\EXPORTAR MERCADOS.csv
 ```
 
 Depois rode em outro terminal:
@@ -68,3 +68,5 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_bfbm_market_scanner.ps1
 O scanner le esses CSVs a cada poucos segundos, salva um snapshot local e envia para o Railway em `/bfbm/markets/snapshot`. O arquivo `EXPORTAR DADOS VISIVEIS.csv` traz status, placar e tempo; o arquivo `EXPORTAR MERCADOS.csv` traz `EventId`, `MarketId`, `MarketType` e horario. O feed `/bfbm/live-full.csv` usa esse catalogo para ajustar nomes de evento, mercado e selecao para o mesmo texto que o BFBM usa.
 
 O scanner nao decide odds. Ele apenas confirma que o mercado existe no BFBM; a odd minima continua protegida pelo `MinPrice` do CSV e pela estrategia do BFBM.
+
+Rotina recomendada: atualize esses dois arquivos pelo BFBM pelo menos uma vez por dia. O bot aceita catalogos com ate 7 dias, mas quanto mais recente, menor a chance de um mercado ter mudado antes da partida.
