@@ -97,7 +97,7 @@ def _normalize_event_name(value: str) -> str:
     return _normalize_name(value).replace(" v ", " x ")
 
 
-def _normalize_corner_market(row: dict[str, Any], selection: str, market_name: str, market_type: str) -> tuple[str, str, str]:
+def _corner_line_and_side(row: dict[str, Any], selection: str, market_name: str, market_type: str) -> tuple[float, str] | None:
     combined = " ".join(
         [
             selection,
@@ -107,16 +107,15 @@ def _normalize_corner_market(row: dict[str, Any], selection: str, market_name: s
         ]
     )
     if "Escanteio" not in combined and "Corner" not in combined and not market_type.endswith("_CORNERS"):
-        return selection, market_name, market_type
+        return None
     line_match = re.search(r"(\d+(?:[,.]\d+)?)", combined)
     if not line_match:
-        return selection, market_name, market_type
+        return None
     line = line_match.group(1).replace(",", ".")
     try:
         line_value = float(line)
     except ValueError:
-        return selection, market_name, market_type
-    code = str(int(round(line_value * 10))).zfill(2)
+        return None
     selection_source = selection or combined
     if re.search(r"\b(Menos|Under)\b", selection_source, re.IGNORECASE):
         side = "Under"
@@ -124,6 +123,14 @@ def _normalize_corner_market(row: dict[str, Any], selection: str, market_name: s
         side = "Over"
     else:
         side = "Under" if re.search(r"\b(Menos|Under)\b", combined, re.IGNORECASE) else "Over"
+    return line_value, side
+
+
+def _normalize_corner_market(row: dict[str, Any], selection: str, market_name: str, market_type: str) -> tuple[str, str, str]:
+    parsed = _corner_line_and_side(row, selection, market_name, market_type)
+    if not parsed:
+        return selection, market_name, market_type
+    line_value, side = parsed
     label = f"{line_value:g}"
     return f"{side} {label} Corners", "Corners Total", "COMBINED_TOTAL"
 
@@ -185,6 +192,37 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
     }
 
 
+def _corner_alias_rows(row: dict[str, str]) -> list[dict[str, str]]:
+    parsed = _corner_line_and_side(row, row.get("SelectionName", ""), row.get("MarketName", ""), row.get("MarketType", ""))
+    if not parsed:
+        return [row]
+    line_value, side_en = parsed
+    line_dot = f"{line_value:g}"
+    line_comma = line_dot.replace(".", ",")
+    side_pt = "Mais" if side_en == "Over" else "Menos"
+    aliases = [
+        ("Corners Total", f"{side_en} {line_dot} Corners", "COMBINED_TOTAL"),
+        (f"Over/Under {line_dot} Corners", f"{side_en} {line_dot} Corners", "COMBINED_TOTAL"),
+        (f"Corners Over/Under {line_dot}", f"{side_en} {line_dot} Corners", "COMBINED_TOTAL"),
+        (f"Mais/Menos de {line_comma} Escanteios", f"{side_pt} de {line_comma} Escanteios", "COMBINED_TOTAL"),
+        (f"Mais/Menos de {line_dot} Escanteios", f"{side_pt} de {line_dot} Escanteios", "COMBINED_TOTAL"),
+        ("Total Corners", f"{side_en} {line_dot} Corners", "COMBINED_TOTAL"),
+    ]
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for market_name, selection_name, market_type in aliases:
+        alias = row.copy()
+        alias["MarketName"] = market_name
+        alias["SelectionName"] = selection_name
+        alias["MarketType"] = market_type
+        alias["__raw"] = "1"
+        key = (market_name.casefold(), selection_name.casefold(), market_type.casefold())
+        if key not in seen:
+            seen.add(key)
+            result.append(alias)
+    return result
+
+
 class BridgeState:
     def __init__(self, state_path: Path, *, min_price: float, max_price: float, max_tips: int, tip_keep_seconds: int) -> None:
         self.state_path = state_path
@@ -238,9 +276,10 @@ class BridgeState:
             }
         self.state_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _row_key(self, row: dict[str, str]) -> tuple[str, str, str]:
+    def _row_key(self, row: dict[str, str]) -> tuple[str, str, str, str]:
         return (
             row.get("EventName", "").casefold(),
+            row.get("MarketName", "").casefold(),
             row.get("MarketType", "").casefold(),
             row.get("SelectionName", "").casefold(),
         )
@@ -273,8 +312,9 @@ class BridgeState:
                 continue
             seen.add(key)
             row["__last_seen"] = str(now_ts)
-            cleaned.append(row)
+            cleaned.extend(_corner_alias_rows(row))
             if len(cleaned) >= self.max_tips:
+                cleaned = cleaned[: self.max_tips]
                 break
         with self.lock:
             merged_by_key: dict[tuple[str, str, str], dict[str, str]] = {
@@ -310,9 +350,10 @@ class BridgeState:
         if not row:
             return False
         with self.lock:
-            key = (row["EventName"].casefold(), row["MarketType"].casefold())
-            self.rows = [existing for existing in self.rows if (existing["EventName"].casefold(), existing["MarketType"].casefold()) != key]
-            self.rows.insert(0, row)
+            aliases = _corner_alias_rows(row)
+            keys = {self._row_key(alias) for alias in aliases}
+            self.rows = [existing for existing in self.rows if self._row_key(existing) not in keys]
+            self.rows = aliases + self.rows
             self.rows = self.rows[: self.max_tips]
         self.save()
         return True
