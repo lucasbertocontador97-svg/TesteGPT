@@ -193,34 +193,7 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
 
 
 def _corner_alias_rows(row: dict[str, str]) -> list[dict[str, str]]:
-    parsed = _corner_line_and_side(row, row.get("SelectionName", ""), row.get("MarketName", ""), row.get("MarketType", ""))
-    if not parsed:
-        return [row]
-    line_value, side_en = parsed
-    line_dot = f"{line_value:g}"
-    line_comma = line_dot.replace(".", ",")
-    side_pt = "Mais" if side_en == "Over" else "Menos"
-    aliases = [
-        ("Corners Total", f"{side_en} {line_dot} Corners", "COMBINED_TOTAL"),
-        (f"Over/Under {line_dot} Corners", f"{side_en} {line_dot} Corners", "COMBINED_TOTAL"),
-        (f"Corners Over/Under {line_dot}", f"{side_en} {line_dot} Corners", "COMBINED_TOTAL"),
-        (f"Mais/Menos de {line_comma} Escanteios", f"{side_pt} de {line_comma} Escanteios", "COMBINED_TOTAL"),
-        (f"Mais/Menos de {line_dot} Escanteios", f"{side_pt} de {line_dot} Escanteios", "COMBINED_TOTAL"),
-        ("Total Corners", f"{side_en} {line_dot} Corners", "COMBINED_TOTAL"),
-    ]
-    result: list[dict[str, str]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for market_name, selection_name, market_type in aliases:
-        alias = row.copy()
-        alias["MarketName"] = market_name
-        alias["SelectionName"] = selection_name
-        alias["MarketType"] = market_type
-        alias["__raw"] = "1"
-        key = (market_name.casefold(), selection_name.casefold(), market_type.casefold())
-        if key not in seen:
-            seen.add(key)
-            result.append(alias)
-    return result
+    return [row]
 
 
 class BridgeState:
@@ -317,12 +290,7 @@ class BridgeState:
                 cleaned = cleaned[: self.max_tips]
                 break
         with self.lock:
-            merged_by_key: dict[tuple[str, str, str], dict[str, str]] = {
-                self._row_key(row): row for row in self._visible_rows()
-            }
-            for row in cleaned:
-                merged_by_key[self._row_key(row)] = row
-            self.rows = list(merged_by_key.values())[-self.max_tips :]
+            self.rows = cleaned[: self.max_tips]
             self.last_source_ok = _now()
             self.last_source_error = None
             self.source_history.append(
