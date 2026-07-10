@@ -109,6 +109,11 @@ def _id_or_zero(value: Any) -> str:
     return text if text else "0"
 
 
+def _start_time_or_empty_default(value: Any) -> str:
+    text = str(value or "").strip()
+    return text if text else "0001-01-01 00:00:00"
+
+
 def _bfbm_clean_name(value: str) -> str:
     aliases = {
         "Nublense": "\u00d1ublense",
@@ -202,7 +207,7 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
         "MarketName": market["MarketName"],
         "EventName": event_name,
         "MarketType": market["MarketType"],
-        "StartTime": str(alert.get("start_time") or alert.get("StartTime") or ""),
+        "StartTime": _start_time_or_empty_default(alert.get("start_time") or alert.get("StartTime")),
         "BetType": "BACK",
         "Price": price_text,
         "Size": stake_text,

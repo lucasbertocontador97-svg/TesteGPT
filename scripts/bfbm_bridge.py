@@ -141,6 +141,11 @@ def _id_value_from(row: dict[str, Any], *names: str) -> str:
     return value if value else "0"
 
 
+def _start_time_value_from(row: dict[str, Any], *names: str) -> str:
+    value = _value_from(row, *names)
+    return value if value else "0001-01-01 00:00:00"
+
+
 def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -> dict[str, str] | None:
     event = _normalize_event_name(str(row.get("EventName") or row.get("event") or ""))
     selection = _normalize_name(str(row.get("SelectionName") or row.get("selection") or ""))
@@ -169,6 +174,7 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
         "EventName": event,
         "MarketType": market_type,
         "StartTime": _value_from(row, "StartTime", "start_time", "Hora de início", "Hora de inicio"),
+        "StartTime": _start_time_value_from(row, "StartTime", "start_time", "Hora de início", "Hora de inicio", "Hora de inÃ­cio"),
         "BetType": str(row.get("BetType") or row.get("bet_type") or "BACK").upper(),
         "Size": str(row.get("Size") or row.get("stake") or row.get("size") or "1.00").strip(),
         "Points": str(row.get("Points") or row.get("points") or "1").strip(),
@@ -320,6 +326,7 @@ class BridgeState:
         row["SelectionId"] = row["SelectionId"] or "0"
         row["MarketId"] = row["MarketId"] or "0"
         row["EventId"] = row["EventId"] or "0"
+        row["StartTime"] = row["StartTime"] or "0001-01-01 00:00:00"
         row["BetType"] = (row["BetType"] or "BACK").upper()
         row["Size"] = row["Size"] or "0.58"
         row["Points"] = row["Points"] or "1"
