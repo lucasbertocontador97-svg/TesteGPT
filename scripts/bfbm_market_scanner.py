@@ -60,6 +60,7 @@ def main() -> int:
     )
     parser.add_argument("--post-url", default="", help="URL Railway /bfbm/markets/snapshot?token=...")
     parser.add_argument("--poll-seconds", type=int, default=5)
+    parser.add_argument("--post-interval-seconds", type=int, default=60)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
 
@@ -67,6 +68,7 @@ def main() -> int:
     snapshot_path = Path(args.snapshot_path)
     post_url = args.post_url.strip() or None
     last_signature: tuple[int, int] | None = None
+    last_post_at = 0.0
     backoff = 1
 
     while True:
@@ -75,10 +77,13 @@ def main() -> int:
                 raise FileNotFoundError(str(export_path))
             stat = export_path.stat()
             signature = (int(stat.st_mtime), stat.st_size)
-            if args.once or signature != last_signature:
+            now = time.time()
+            should_post = args.once or signature != last_signature or (post_url and now - last_post_at >= max(5, args.post_interval_seconds))
+            if should_post:
                 count, result = scan_once(export_path, snapshot_path, post_url)
                 print(f"[scanner] mercados={count} envio={result}", flush=True)
                 last_signature = signature
+                last_post_at = now
                 backoff = 1
             if args.once:
                 return 0

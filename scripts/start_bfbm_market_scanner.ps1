@@ -13,4 +13,5 @@ $PostUrl = "https://testegpt-production.up.railway.app/bfbm/markets/snapshot?tok
 & $Python $Scanner `
     --export-path $ExportPath `
     --post-url $PostUrl `
-    --poll-seconds 5
+    --poll-seconds 5 `
+    --post-interval-seconds 30
