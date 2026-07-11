@@ -336,5 +336,53 @@ class Storage:
             "profit_units": round(float(profit), 2),
         }
 
+    def strategy_report(self, limit: int = 80) -> dict[str, Any]:
+        total = self.conn.execute("select count(*) as total from alerts").fetchone()["total"]
+        by_status = {
+            row["status"]: row["total"]
+            for row in self.conn.execute("select status, count(*) as total from alerts group by status").fetchall()
+        }
+        by_action = {
+            row["user_action"]: row["total"]
+            for row in self.conn.execute("select user_action, count(*) as total from alerts group by user_action").fetchall()
+        }
+        by_market = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                select market, selection, line, status, user_action, count(*) as total,
+                       round(avg(confidence), 1) as avg_confidence,
+                       min(created_at) as first_at,
+                       max(created_at) as last_at
+                from alerts
+                group by market, selection, line, status, user_action
+                order by total desc, last_at desc
+                limit ?
+                """,
+                (max(1, limit),),
+            ).fetchall()
+        ]
+        recent = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                select id, created_at, home, away, minute, market, selection, line,
+                       confidence, status, user_action, result_note
+                from alerts
+                order by id desc
+                limit ?
+                """,
+                (max(1, limit),),
+            ).fetchall()
+        ]
+        return {
+            "total_alerts": total,
+            "by_status": by_status,
+            "by_action": by_action,
+            "performance_betted": self.performance(),
+            "by_market": by_market,
+            "recent": recent,
+        }
+
     def export_json(self) -> str:
         return json.dumps(self.last_alerts(20), ensure_ascii=False, indent=2)

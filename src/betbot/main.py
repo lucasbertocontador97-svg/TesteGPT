@@ -446,6 +446,25 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if parsed.path == "/bfbm/strategy-report.json":
+            query = parse_qs(parsed.query)
+            try:
+                limit = int(query.get("limit", ["80"])[0])
+            except ValueError:
+                limit = 80
+            storage = Storage(settings.database_path)
+            try:
+                data = storage.strategy_report(limit=max(10, min(250, limit)))
+            finally:
+                storage.close()
+            body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if parsed.path == "/bfbm/create-live-00-goals":
             try:
                 created_count, events = asyncio.run(create_live_bfbm_zero_zero_goal_tests(settings, 4))
