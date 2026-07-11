@@ -118,7 +118,32 @@ def require_telegram_settings(settings: Settings) -> None:
         raise RuntimeError("Variaveis obrigatorias ausentes: " + ", ".join(missing))
 
 
+def database_storage_status(settings: Settings) -> dict[str, str | bool]:
+    db_path = settings.database_path
+    volume_path = Path(settings.railway_volume_mount_path) if settings.railway_volume_mount_path else None
+    persistent = False
+    reason = "sem volume Railway detectado"
+    if volume_path:
+        try:
+            db_resolved = db_path.resolve()
+            volume_resolved = volume_path.resolve()
+            persistent = db_resolved == volume_resolved or volume_resolved in db_resolved.parents
+            reason = "banco dentro do volume Railway" if persistent else "DATABASE_PATH fora do volume Railway"
+        except OSError:
+            db_text = str(db_path)
+            volume_text = str(volume_path)
+            persistent = db_text == volume_text or db_text.startswith(volume_text.rstrip("/\\") + "/")
+            reason = "banco dentro do volume Railway" if persistent else "DATABASE_PATH fora do volume Railway"
+    return {
+        "persistent": persistent,
+        "database_path": str(db_path),
+        "volume_mount_path": str(volume_path or ""),
+        "reason": reason,
+    }
+
+
 def settings_presence(settings: Settings) -> dict[str, bool]:
+    db_status = database_storage_status(settings)
     return {
         "TELEGRAM_BOT_TOKEN": bool(settings.telegram_bot_token),
         "TELEGRAM_CHAT_ID": bool(settings.telegram_chat_id),
@@ -139,4 +164,5 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
         "GAME_COOLDOWN_MINUTES": bool(settings.game_cooldown_minutes),
         "BFBM_EXPORT": settings.bfbm_export,
         "BFBM_TOKEN": bool(settings.bfbm_token),
+        "DATABASE_PERSISTENT": bool(db_status["persistent"]),
     }

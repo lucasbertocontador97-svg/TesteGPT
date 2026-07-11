@@ -18,7 +18,7 @@ from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_wit
 from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, full_rows_with_audit, rows_to_full_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
 from .bfbm_markets import _event_score, find_bfbm_market, market_family, market_line, payload_to_markets
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
-from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
+from .config import database_storage_status, load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
 from .markets import flatten_all_markets, flatten_markets, market_matches_idea
 from .matching import find_matching_odds_event, find_matching_sportmonks_fixture, find_matching_thestatsapi_match, find_matching_totalcorner_match, sportmonks_participant_names
@@ -404,6 +404,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/live-overlap.json",
             "/bfbm/strategy-report.json",
             "/bfbm/export-audit.json",
+            "/bfbm/system-health.json",
             "/bfbm/notify-bet",
             "/health",
         }:
@@ -459,6 +460,25 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 data = storage.strategy_report(limit=max(10, min(250, limit)))
             finally:
                 storage.close()
+            body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if parsed.path == "/bfbm/system-health.json":
+            storage_status = database_storage_status(settings)
+            data = {
+                "ok": bool(storage_status["persistent"]),
+                "database": storage_status,
+                "bfbm_export": settings.bfbm_export,
+                "bfbm_token_configured": bool(settings.bfbm_token),
+                "poll_seconds": settings.poll_seconds,
+                "bfbm_max_tip_age_minutes": settings.bfbm_max_tip_age_minutes,
+                "warning": "" if storage_status["persistent"] else "Banco temporario: historico e auditoria podem sumir em redeploy/restart.",
+            }
             body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1151,10 +1171,12 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     storage = Storage(settings.database_path)
     try:
         perf = storage.performance()
-        db_mode = "persistente" if settings.railway_volume_mount_path else "temporario"
+        db_status = database_storage_status(settings)
+        db_mode = "persistente" if db_status["persistent"] else "TEMPORARIO - corrigir volume"
         await update.message.reply_text(
             f"Status: online\n"
             f"Banco: {db_mode}\n"
+            f"Banco path: {db_status['database_path']}\n"
             f"BFBM: {'ativo' if settings.bfbm_export else 'inativo'}\n"
             f"Apostadas: {perf['actions'].get('BET', 0)}\n"
             f"Pendentes: {perf['actions'].get('PENDING', 0)}\n"
@@ -1531,6 +1553,17 @@ async def envcheck_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     lines = ["Variaveis vistas pelo bot:"]
     for name, ok in presence.items():
         lines.append(f"{name}: {'OK' if ok else 'AUSENTE'}")
+    db_status = database_storage_status(settings)
+    lines.extend(
+        [
+            "",
+            "Banco:",
+            f"persistente: {'SIM' if db_status['persistent'] else 'NAO'}",
+            f"path: {db_status['database_path']}",
+            f"volume: {db_status['volume_mount_path'] or '-'}",
+            f"motivo: {db_status['reason']}",
+        ]
+    )
     await update.message.reply_text("\n".join(lines))
 
 
@@ -2217,10 +2250,17 @@ async def scheduled_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def startup_alert_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = load_settings()
+    db_status = database_storage_status(settings)
+    warning = ""
+    if not db_status["persistent"]:
+        warning = (
+            "\n\nATENCAO: banco temporario detectado. "
+            "Historico/auditoria podem sumir em redeploy. Configure Volume no Railway em /data."
+        )
     await send_message(
         settings.telegram_bot_token,
         settings.telegram_chat_id,
-        "Bot iniciado no Railway. Use /status ou /scan para testar.",
+        "Bot iniciado no Railway. Use /status ou /scan para testar." + warning,
     )
 
 

@@ -55,7 +55,7 @@ Com URL publica, o bot usa webhook e para de usar `getUpdates`.
 
 ## Historico persistente
 
-Crie um Volume no servico do bot para preservar o banco SQLite entre deploys.
+Crie um Volume no servico do bot para preservar o banco SQLite entre deploys. Para operacao real com BFBM, trate isso como obrigatorio.
 
 Sugestao de mount path:
 
@@ -63,13 +63,17 @@ Sugestao de mount path:
 /data
 ```
 
-Quando o Railway tiver `RAILWAY_VOLUME_MOUNT_PATH`, o bot salva automaticamente o banco em:
+Configure tambem a variavel abaixo para deixar o caminho explicito:
 
-```text
-$RAILWAY_VOLUME_MOUNT_PATH/bot.sqlite3
+```env
+DATABASE_PATH=/data/bot.sqlite3
 ```
 
-Sem Volume, o bot roda, mas o historico pode ser perdido quando houver redeploy.
+Sem Volume, o bot roda, mas o historico, auditoria BFBM e performance por estrategia podem ser perdidos quando houver redeploy/restart. O bot avisa isso no startup, em `/status`, `/envcheck` e no endpoint:
+
+```text
+/bfbm/system-health.json?token=SEU_BFBM_TOKEN
+```
 
 ## Confirmar que esta funcionando
 
