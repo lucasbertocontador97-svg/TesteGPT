@@ -255,8 +255,21 @@ def market_family(market_name: str) -> str:
     normalized = normalize_text(market_name)
     if "escanteio" in normalized or "corner" in normalized:
         return "corners"
+    if (
+        ("primeiro tempo" in normalized or "first half" in normalized or "intervalo" in normalized)
+        and ("gol" in normalized or "goal" in normalized)
+    ):
+        return "first_half_goals"
     if "gol" in normalized or "goal" in normalized:
         return "goals"
+    if "ambos os times marcam" in normalized or "both teams" in normalized:
+        return "btts"
+    if "chance dupla" in normalized or "double chance" in normalized:
+        return "double_chance"
+    if "handicap asiatico" in normalized or "asian handicap" in normalized:
+        return "asian_handicap"
+    if "cartao" in normalized or "booking" in normalized:
+        return "cards"
     if "resultado" in normalized or "match odds" in normalized:
         return "match_odds"
     if "placar correto" in normalized or "correct score" in normalized:

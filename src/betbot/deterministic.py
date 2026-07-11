@@ -49,14 +49,76 @@ def _poisson_at_least(mean: float, needed: int) -> float:
     return max(0.0, min(1.0, 1.0 - cumulative))
 
 
+def _poisson_at_most(mean: float, maximum: int) -> float:
+    if maximum < 0:
+        return 0.0
+    cumulative = 0.0
+    for k in range(maximum + 1):
+        cumulative += math.exp(-mean) * (mean**k) / math.factorial(k)
+    return max(0.0, min(1.0, cumulative))
+
+
 def _needed_over(current_total: int, line: float) -> int:
     return max(0, math.floor(line - current_total) + 1)
+
+
+def _available_lines(
+    available_markets: list[tuple[str, float | None]] | None,
+    family: str,
+    fallback: tuple[float, ...],
+) -> list[float]:
+    if available_markets is None:
+        return list(fallback)
+    return sorted(
+        {
+            float(line)
+            for market_family, line in available_markets
+            if market_family == family and line is not None
+        }
+    )
+
+
+def _goal_over_threshold(minute: int, needed_goals: int) -> float:
+    if needed_goals <= 1:
+        return 0.50 if minute >= 70 else 0.56
+    if needed_goals == 2:
+        return 0.40 if minute >= 62 else 0.46
+    return 0.34
+
+
+def _goal_over_strategy(line: float) -> str:
+    return f"GOAL_OVER_{int(round(line * 10)):02d}_FT"
+
+
+def _goal_under_strategy(line: float) -> str:
+    return f"GOAL_UNDER_{int(round(line * 10)):02d}_FT"
 
 
 def _dead_game(minute: int, total_shots: float, shots_on: float, dangerous: float) -> bool:
     if minute < 30:
         return False
     return total_shots <= 5 and shots_on <= 1 and dangerous <= 20
+
+
+def _under_goal_conviction(probability_score: int, minute: int, total_shots: float, shots_on: float, pressure: float) -> int:
+    bonus = 0
+    if minute >= 75:
+        bonus += 8
+    elif minute >= 65:
+        bonus += 4
+    if total_shots <= 7:
+        bonus += 9
+    elif total_shots <= 10:
+        bonus += 5
+    if shots_on <= 2:
+        bonus += 8
+    elif shots_on <= 3:
+        bonus += 4
+    if pressure <= 30:
+        bonus += 8
+    elif pressure <= 45:
+        bonus += 4
+    return min(95, probability_score + bonus)
 
 
 def _effective_pressure(dangerous: float, attacks: float, total_shots: float, shots_on: float) -> tuple[float, str]:
@@ -230,7 +292,7 @@ def _candidate_priority(signal: DeterministicSignal) -> int:
         return 4
     if signal.strategy.startswith("CORNER_"):
         return 3
-    if signal.strategy.startswith("GOAL_OVER_"):
+    if signal.strategy.startswith("GOAL_OVER_") or signal.strategy.startswith("GOAL_UNDER_"):
         return 2
     return 1
 
@@ -270,8 +332,7 @@ def evaluate_game(
     corners = _sum_stat(stats, ("Corner Kicks", "Corners"))
     pressure, pressure_label = _effective_pressure(dangerous, attacks, total_shots, shots_on)
 
-    if _dead_game(minute, total_shots, shots_on, pressure):
-        return DeterministicSignal(False, "none", "none", None, 0, 0, 0, "Jogo morto: baixo volume ofensivo e pouca pressao.", "dead_game")
+    dead_game = _dead_game(minute, total_shots, shots_on, pressure)
 
     candidates: list[DeterministicSignal] = []
 
@@ -305,30 +366,30 @@ def evaluate_game(
                 )
             )
 
-    for line, threshold, name in (
-        (1.5, 0.75, "GOAL_OVER_15_FT"),
-        (2.5, 0.72, "GOAL_OVER_25_FT"),
-        (3.5, 0.68, "GOAL_OVER_35_FT"),
-        (4.5, 0.62, "GOAL_OVER_45_FT"),
-        (5.5, 0.58, "GOAL_OVER_55_FT"),
-    ):
-        if line == 1.5 and minute < 55:
-            continue
-        if line == 1.5 and current_goals >= 1 and minute < 70:
-            continue
-        if line == 2.5 and minute < 55:
-            continue
-        if line == 2.5 and current_goals >= 2 and minute < 60:
-            continue
-        if line >= 3.5 and minute < 62:
-            continue
-        if line >= 3.5 and current_goals < line - 1.5:
+    goal_lines = _available_lines(available_markets, "goals", (0.5, 1.5, 2.5, 3.5, 4.5, 5.5))
+    for line in goal_lines:
+        if line < 0.5 or line > 8.5:
             continue
         needed_goals = _needed_over(current_goals, line)
         if needed_goals <= 0:
             continue
+        if line == 0.5 and current_goals == 0 and not nil_nil_goal_window:
+            continue
+        if line == 1.5 and minute < 55:
+            continue
+        if line == 1.5 and current_goals >= 1 and minute < 68:
+            continue
+        if line >= 2.5 and minute < 55:
+            continue
+        if line >= 3.5 and minute < 62:
+            continue
+        if line >= 3.5 and current_goals < line - 2.0:
+            continue
+        if needed_goals >= 3 and not (total_shots >= 14 and shots_on >= 5 and pressure >= 60):
+            continue
         prob = _poisson_at_least(goal_mean, needed_goals)
         score = round(prob * 100)
+        threshold = _goal_over_threshold(minute, needed_goals)
         if prob >= threshold and score >= min_confidence:
             candidates.append(
                 DeterministicSignal(
@@ -340,9 +401,33 @@ def evaluate_game(
                     score,
                     score,
                     f"Poisson {prob:.0%} para over {line:g}; chutes {total_shots:g}, no gol {shots_on:g}, {pressure_label}.",
-                    name,
+                    _goal_over_strategy(line),
                 )
             )
+
+    if minute >= 65 and (dead_game or (total_shots <= 10 and shots_on <= 3 and pressure <= 45)):
+        for line in goal_lines:
+            if line <= current_goals or line > current_goals + 3.5:
+                continue
+            additional_allowed = max(-1, math.ceil(line - current_goals) - 1)
+            prob = _poisson_at_most(goal_mean, additional_allowed)
+            score = round(prob * 100)
+            conviction = _under_goal_conviction(score, minute, total_shots, shots_on, pressure)
+            if prob >= 0.74 and conviction >= max(min_confidence, 78):
+                candidates.append(
+                    DeterministicSignal(
+                        True,
+                        "goals",
+                        "under",
+                        line,
+                        prob,
+                        conviction,
+                        conviction,
+                        f"Under {line:g} com probabilidade {prob:.0%}; jogo frio com chutes {total_shots:g}, no gol {shots_on:g} e {pressure_label}.",
+                        _goal_under_strategy(line),
+                    )
+                )
+                break
 
     if 58 <= minute <= 86 and current_goals > 0:
         next_goal_line = current_goals + 0.5
@@ -368,8 +453,12 @@ def evaluate_game(
     corner_window = _next_corner_window(minute)
     if corner_window:
         strategy_name, threshold = corner_window
+        corner_lines = _available_lines(available_markets, "corners", (corners + 0.5,))
+        viable_corner_lines = [line for line in corner_lines if line > corners and line <= corners + 2.5]
+        target_corner_line = min(viable_corner_lines) if viable_corner_lines else corners + 0.5
+        needed_corners = _needed_over(int(corners), target_corner_line)
         corner_mean = _corner_lambda(minute, corners, total_shots, pressure)
-        prob = _poisson_at_least(corner_mean, 1)
+        prob = _poisson_at_least(corner_mean, needed_corners)
         score = round(prob * 100)
         conviction = _next_corner_conviction(
             probability_score=score,
@@ -387,11 +476,11 @@ def evaluate_game(
                     True,
                     "corners",
                     "over",
-                    corners + 0.5,
+                    target_corner_line,
                     prob,
                     conviction,
                     conviction,
-                    f"Probabilidade {prob:.0%} de pelo menos mais um escanteio; linha sugerida over {corners + 0.5:g}; conviccao {conviction} por escanteios {corners:g}, chutes {total_shots:g}, no gol {shots_on:g} e {pressure_label}.",
+                    f"Probabilidade {prob:.0%} para over {target_corner_line:g} escanteios; conviccao {conviction} por escanteios {corners:g}, chutes {total_shots:g}, no gol {shots_on:g} e {pressure_label}.",
                     strategy_name,
                 )
             )
