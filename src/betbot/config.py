@@ -50,8 +50,14 @@ class Settings:
 def load_settings() -> Settings:
     load_dotenv()
     volume_path = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
-    default_db_path = Path(volume_path) / "bot.sqlite3" if volume_path else Path("bot.sqlite3")
-    db_path = Path(os.getenv("DATABASE_PATH", str(default_db_path)))
+    raw_db_path = os.getenv("DATABASE_PATH")
+    if volume_path:
+        if raw_db_path and Path(raw_db_path).is_absolute():
+            db_path = Path(raw_db_path)
+        else:
+            db_path = Path(volume_path) / Path(raw_db_path or "bot.sqlite3").name
+    else:
+        db_path = Path(raw_db_path or "bot.sqlite3")
     railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN")
     webhook_base_url = os.getenv("TELEGRAM_WEBHOOK_URL")
     return Settings(
