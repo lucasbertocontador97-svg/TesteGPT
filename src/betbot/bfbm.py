@@ -298,6 +298,10 @@ def _has_valid_export_ids(row: dict[str, str]) -> bool:
     return event_id.isdigit() and event_id != "0" and market_id not in {"", "0"}
 
 
+def _has_matchable_names(row: dict[str, str]) -> bool:
+    return all(str(row.get(field) or "").strip() for field in ("EventName", "MarketName", "SelectionName"))
+
+
 def _audit_row(
     alert: dict[str, Any],
     endpoint: str,
@@ -346,10 +350,18 @@ def full_rows_with_audit(
         if catalog_rows:
             matched = enrich_row_from_bfbm_catalog(row, catalog_rows)
             if not matched:
+                if _has_matchable_names(row):
+                    rows.append(row)
+                    audits.append(_audit_row(alert, endpoint, "EXPORTED", "exported_without_catalog_match_bfbm_may_fill", row))
+                    continue
                 audits.append(_audit_row(alert, endpoint, "SKIPPED", "no_bfbm_market_match", row))
                 continue
             row = matched
         if not _has_valid_export_ids(row):
+            if _has_matchable_names(row):
+                rows.append(row)
+                audits.append(_audit_row(alert, endpoint, "EXPORTED", "exported_without_ids_bfbm_may_fill", row))
+                continue
             audits.append(_audit_row(alert, endpoint, "SKIPPED", "missing_required_bfbm_ids", row))
             continue
         rows.append(row)
