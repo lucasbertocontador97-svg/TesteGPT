@@ -166,9 +166,9 @@ def _nil_nil_goal_window(minute: int, current_goals: int) -> tuple[str, int, flo
     if current_goals != 0:
         return None
     if 18 <= minute <= 25:
-        return "Over 0.5 HT", 45, 0.40
-    if 62 <= minute <= 80:
-        return "Over 0.5 FT", 90, 0.45
+        return "GOAL_OVER_05_HT", 45, 0.40
+    if 58 <= minute <= 82:
+        return "GOAL_OVER_05_FT", 90, 0.45
     return None
 
 
@@ -215,18 +215,22 @@ def _next_corner_conviction(
 
 def _next_corner_window(minute: int) -> tuple[str, float] | None:
     if 37 <= minute <= 39:
-        return "Asian Corner +0.5 HT", 0.55
+        return "CORNER_PLUS_05_HT", 0.55
+    if 55 <= minute <= 70:
+        return "CORNER_PRESSURE_2H", 0.62
     if 78 <= minute <= 85:
-        return "Asian Corner +0.5 FT", 0.55
+        return "CORNER_PLUS_05_FT", 0.55
     return None
 
 
 def _candidate_priority(signal: DeterministicSignal) -> int:
-    if signal.strategy in {"Over 0.5 HT", "Over 0.5 FT"}:
+    if signal.strategy in {"GOAL_OVER_05_HT", "GOAL_OVER_05_FT"}:
+        return 5
+    if signal.strategy == "GOAL_NEXT_LINE_FT":
         return 4
-    if signal.strategy.startswith("Asian Corner"):
+    if signal.strategy.startswith("CORNER_"):
         return 3
-    if signal.strategy.startswith("Asian Goal"):
+    if signal.strategy.startswith("GOAL_OVER_"):
         return 2
     return 1
 
@@ -302,8 +306,11 @@ def evaluate_game(
             )
 
     for line, threshold, name in (
-        (1.5, 0.75, "Over 1.5 FT"),
-        (2.5, 0.72, "Over 2.5 FT"),
+        (1.5, 0.75, "GOAL_OVER_15_FT"),
+        (2.5, 0.72, "GOAL_OVER_25_FT"),
+        (3.5, 0.68, "GOAL_OVER_35_FT"),
+        (4.5, 0.62, "GOAL_OVER_45_FT"),
+        (5.5, 0.58, "GOAL_OVER_55_FT"),
     ):
         if line == 1.5 and minute < 55:
             continue
@@ -312,6 +319,10 @@ def evaluate_game(
         if line == 2.5 and minute < 55:
             continue
         if line == 2.5 and current_goals >= 2 and minute < 60:
+            continue
+        if line >= 3.5 and minute < 62:
+            continue
+        if line >= 3.5 and current_goals < line - 1.5:
             continue
         needed_goals = _needed_over(current_goals, line)
         if needed_goals <= 0:
@@ -333,12 +344,13 @@ def evaluate_game(
                 )
             )
 
-    if 70 <= minute <= 86 and current_goals > 0:
+    if 58 <= minute <= 86 and current_goals > 0:
         next_goal_line = current_goals + 0.5
         prob = _poisson_at_least(goal_mean, 1)
         score = round(prob * 100)
         conviction = _next_goal_conviction(score, total_shots, shots_on, corners, pressure)
-        if prob >= 0.50 and conviction >= min_confidence:
+        threshold = 0.56 if minute < 70 else 0.50
+        if prob >= threshold and conviction >= min_confidence:
             candidates.append(
                 DeterministicSignal(
                     True,
@@ -349,7 +361,7 @@ def evaluate_game(
                     conviction,
                     conviction,
                     f"Probabilidade {prob:.0%} de pelo menos mais um gol; conviccao {conviction} por chutes {total_shots:g}, no gol {shots_on:g}, escanteios {corners:g} e {pressure_label}.",
-                    "Asian Goal +0.5 FT",
+                    "GOAL_NEXT_LINE_FT",
                 )
             )
 
@@ -367,6 +379,8 @@ def evaluate_game(
             shots_on=shots_on,
             pressure=pressure,
         )
+        if strategy_name == "CORNER_PRESSURE_2H" and not (pressure >= 60 and total_shots >= 10 and corners >= 3):
+            conviction = 0
         if prob >= threshold and conviction >= min_confidence:
             candidates.append(
                 DeterministicSignal(

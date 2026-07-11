@@ -47,7 +47,8 @@ class Storage:
                 betfair_market_id text,
                 betfair_selection_id text,
                 betfair_event_id text,
-                betfair_start_time text
+                betfair_start_time text,
+                strategy text
             );
             create index if not exists idx_alerts_status on alerts(status);
             create table if not exists bfbm_markets (
@@ -112,7 +113,7 @@ class Storage:
         columns = {row["name"] for row in self.conn.execute("pragma table_info(alerts)").fetchall()}
         if "user_action" not in columns:
             self.conn.execute("alter table alerts add column user_action text not null default 'PENDING'")
-        for column in ("betfair_market_id", "betfair_selection_id", "betfair_event_id", "betfair_start_time"):
+        for column in ("betfair_market_id", "betfair_selection_id", "betfair_event_id", "betfair_start_time", "strategy"):
             if column not in columns:
                 self.conn.execute(f"alter table alerts add column {column} text")
         self.conn.execute("create index if not exists idx_alerts_user_action on alerts(user_action)")
@@ -325,8 +326,8 @@ class Storage:
             """
             insert or ignore into alerts (
                 event_id, fixture_id, home, away, minute, market, selection, bookmaker,
-                odd, line, confidence, reason, stake, alert_key
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                odd, line, confidence, reason, stake, alert_key, strategy
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 game.event_id,
@@ -343,6 +344,7 @@ class Storage:
                 decision.reason,
                 decision.stake,
                 decision.alert_key,
+                decision.strategy,
             ),
         )
         self.conn.commit()
@@ -353,8 +355,8 @@ class Storage:
             """
             insert or ignore into alerts (
                 event_id, fixture_id, home, away, minute, market, selection, bookmaker,
-                odd, line, confidence, reason, stake, alert_key
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                odd, line, confidence, reason, stake, alert_key, strategy
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 game.event_id,
@@ -371,6 +373,7 @@ class Storage:
                 decision.reason,
                 decision.stake,
                 decision.alert_key,
+                decision.strategy,
             ),
         )
         self.conn.commit()
@@ -458,12 +461,13 @@ class Storage:
             dict(row)
             for row in self.conn.execute(
                 """
-                select market, selection, line, status, user_action, count(*) as total,
+                select coalesce(strategy, 'sem_estrategia') as strategy,
+                       market, selection, line, status, user_action, count(*) as total,
                        round(avg(confidence), 1) as avg_confidence,
                        min(created_at) as first_at,
                        max(created_at) as last_at
                 from alerts
-                group by market, selection, line, status, user_action
+                group by coalesce(strategy, 'sem_estrategia'), market, selection, line, status, user_action
                 order by total desc, last_at desc
                 limit ?
                 """,
@@ -474,7 +478,7 @@ class Storage:
             dict(row)
             for row in self.conn.execute(
                 """
-                select id, created_at, home, away, minute, market, selection, line,
+                select id, created_at, home, away, minute, market, selection, line, strategy,
                        confidence, status, user_action, result_note
                 from alerts
                 order by id desc

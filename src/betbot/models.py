@@ -52,6 +52,7 @@ class Decision:
     alert_key: str | None = None
     bookmaker_links: dict[str, str] = field(default_factory=dict)
     market_status: str | None = None
+    strategy: str | None = None
 
 
 @dataclass(frozen=True)

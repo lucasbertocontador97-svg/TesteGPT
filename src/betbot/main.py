@@ -1069,6 +1069,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     target_stake,
                     alert_key,
                     market_status=totalcorner_market_status(game.totalcorner_match, target_family),
+                    strategy=math_signal.strategy,
                 )
             else:
                 chosen = sorted(compatible, key=lambda market: market.odd, reverse=True)[0]
@@ -1088,6 +1089,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     target_stake,
                     odds_alert_key(game, target_family, target_selection, chosen.line or target_line),
                     bookmaker_links,
+                    strategy=math_signal.strategy,
                 )
             if storage.seen_alert(decision.alert_key):
                 logger.info("Entrada repetida ignorada: %s", decision.alert_key)
@@ -1693,6 +1695,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 final_reason,
                 final_stake,
                 alert_key,
+                strategy=math_signal.strategy,
             )
             alert_id = storage.save_manual_alert(game, decision)
             minute = "?" if game.minute is None else f"{game.minute}'"
@@ -1821,6 +1824,7 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
             signal.reason,
             "baixa",
             alert_key,
+            strategy=signal.strategy,
         )
         alert_id = storage.save_manual_alert(game, decision)
 
