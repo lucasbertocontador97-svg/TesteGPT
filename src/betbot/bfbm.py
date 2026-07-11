@@ -272,6 +272,84 @@ def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[st
     return enriched
 
 
+def _has_valid_export_ids(row: dict[str, str]) -> bool:
+    event_id = str(row.get("EventId") or "").strip()
+    market_id = str(row.get("MarketId") or "").strip()
+    return event_id.isdigit() and event_id != "0" and market_id not in {"", "0"}
+
+
+def _audit_row(
+    alert: dict[str, Any],
+    endpoint: str,
+    status: str,
+    reason: str,
+    row: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    row = row or {}
+    return {
+        "alert_id": alert.get("id"),
+        "alert_key": alert.get("alert_key", ""),
+        "endpoint": endpoint,
+        "status": status,
+        "reason": reason,
+        "home": alert.get("home", ""),
+        "away": alert.get("away", ""),
+        "event_name": _event_name(alert),
+        "market": alert.get("market", ""),
+        "selection": alert.get("selection", ""),
+        "line": alert.get("line"),
+        "bfbm_event_name": row.get("EventName", ""),
+        "bfbm_market_name": row.get("MarketName", ""),
+        "bfbm_selection_name": row.get("SelectionName", ""),
+        "bfbm_event_id": row.get("EventId", ""),
+        "bfbm_market_id": row.get("MarketId", ""),
+        "bfbm_selection_id": row.get("SelectionId", ""),
+        "bfbm_start_time": row.get("StartTime", ""),
+        "raw": {"alert": alert, "row": row},
+    }
+
+
+def full_rows_with_audit(
+    alerts: list[dict[str, Any]],
+    config: BfbmConfig,
+    catalog_rows: list[dict[str, Any]] | None = None,
+    endpoint: str = "/bfbm/live-full.csv",
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    rows: list[dict[str, str]] = []
+    audits: list[dict[str, Any]] = []
+    catalog_rows = catalog_rows or []
+    for alert in alerts:
+        row = alert_to_bfbm_row(alert, config)
+        if not row:
+            audits.append(_audit_row(alert, endpoint, "SKIPPED", "unsupported_market_or_selection"))
+            continue
+        if catalog_rows:
+            matched = enrich_row_from_bfbm_catalog(row, catalog_rows)
+            if not matched:
+                audits.append(_audit_row(alert, endpoint, "SKIPPED", "no_bfbm_market_match", row))
+                continue
+            row = matched
+        if not _has_valid_export_ids(row):
+            audits.append(_audit_row(alert, endpoint, "SKIPPED", "missing_required_bfbm_ids", row))
+            continue
+        rows.append(row)
+        selection_id = str(row.get("SelectionId") or "").strip()
+        reason = "exported_with_ids"
+        if selection_id in {"", "0"}:
+            reason = "exported_without_selection_id_bfbm_may_fill"
+        audits.append(_audit_row(alert, endpoint, "EXPORTED", reason, row))
+    return rows, audits
+
+
+def rows_to_full_csv(rows: list[dict[str, str]]) -> str:
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=BFBM_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    return buffer.getvalue()
+
+
 def tips_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
     buffer = io.StringIO(newline="")
     rows = [row for alert in alerts if (row := alert_to_bfbm_row(alert, config))]
@@ -283,15 +361,8 @@ def tips_csv(alerts: list[dict[str, Any]], config: BfbmConfig) -> str:
 
 
 def tips_full_csv(alerts: list[dict[str, Any]], config: BfbmConfig, catalog_rows: list[dict[str, Any]] | None = None) -> str:
-    buffer = io.StringIO(newline="")
-    rows = [row for alert in alerts if (row := alert_to_bfbm_row(alert, config))]
-    if catalog_rows:
-        rows = [matched for row in rows if (matched := enrich_row_from_bfbm_catalog(row, catalog_rows))]
-    writer = csv.DictWriter(buffer, fieldnames=BFBM_COLUMNS, extrasaction="ignore")
-    writer.writeheader()
-    for row in rows:
-        writer.writerow(row)
-    return buffer.getvalue()
+    rows, _audits = full_rows_with_audit(alerts, config, catalog_rows)
+    return rows_to_full_csv(rows)
 
 
 def tips_rich_csv(alerts: list[dict[str, Any]], config: BfbmConfig, catalog_rows: list[dict[str, Any]] | None = None) -> str:

@@ -71,6 +71,42 @@ class Storage:
                 source_age_seconds real
             );
             create index if not exists idx_bfbm_markets_captured_at on bfbm_markets(captured_at);
+            create table if not exists bfbm_export_audit (
+                id integer primary key autoincrement,
+                alert_id integer,
+                alert_key text,
+                first_seen_at datetime default current_timestamp,
+                last_seen_at datetime default current_timestamp,
+                seen_count integer not null default 1,
+                endpoint text not null,
+                status text not null,
+                reason text not null,
+                home text,
+                away text,
+                event_name text,
+                market text,
+                selection text,
+                line real,
+                bfbm_event_name text,
+                bfbm_market_name text,
+                bfbm_selection_name text,
+                bfbm_event_id text,
+                bfbm_market_id text,
+                bfbm_selection_id text,
+                bfbm_start_time text,
+                raw_json text,
+                unique(alert_id, endpoint)
+            );
+            create index if not exists idx_bfbm_export_audit_last_seen on bfbm_export_audit(last_seen_at);
+            create table if not exists bfbm_bet_notifications (
+                id integer primary key autoincrement,
+                created_at datetime default current_timestamp,
+                bet_id text not null unique,
+                size_matched text,
+                success text,
+                strategy text,
+                raw_line text
+            );
             """
         )
         columns = {row["name"] for row in self.conn.execute("pragma table_info(alerts)").fetchall()}
@@ -91,6 +127,78 @@ class Storage:
         ):
             if column not in market_columns:
                 self.conn.execute(f"alter table bfbm_markets add column {column} {ddl_type}")
+        self.conn.commit()
+
+    def record_bfbm_export_audit(self, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        self.conn.executemany(
+            """
+            insert into bfbm_export_audit (
+                alert_id, alert_key, endpoint, status, reason, home, away, event_name,
+                market, selection, line, bfbm_event_name, bfbm_market_name,
+                bfbm_selection_name, bfbm_event_id, bfbm_market_id, bfbm_selection_id,
+                bfbm_start_time, raw_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(alert_id, endpoint) do update set
+                last_seen_at = current_timestamp,
+                seen_count = seen_count + 1,
+                status = excluded.status,
+                reason = excluded.reason,
+                bfbm_event_name = excluded.bfbm_event_name,
+                bfbm_market_name = excluded.bfbm_market_name,
+                bfbm_selection_name = excluded.bfbm_selection_name,
+                bfbm_event_id = excluded.bfbm_event_id,
+                bfbm_market_id = excluded.bfbm_market_id,
+                bfbm_selection_id = excluded.bfbm_selection_id,
+                bfbm_start_time = excluded.bfbm_start_time,
+                raw_json = excluded.raw_json
+            """,
+            [
+                (
+                    row.get("alert_id"),
+                    row.get("alert_key", ""),
+                    row.get("endpoint", ""),
+                    row.get("status", ""),
+                    row.get("reason", ""),
+                    row.get("home", ""),
+                    row.get("away", ""),
+                    row.get("event_name", ""),
+                    row.get("market", ""),
+                    row.get("selection", ""),
+                    row.get("line"),
+                    row.get("bfbm_event_name", ""),
+                    row.get("bfbm_market_name", ""),
+                    row.get("bfbm_selection_name", ""),
+                    row.get("bfbm_event_id", ""),
+                    row.get("bfbm_market_id", ""),
+                    row.get("bfbm_selection_id", ""),
+                    row.get("bfbm_start_time", ""),
+                    json.dumps(row.get("raw", {}), ensure_ascii=False),
+                )
+                for row in rows
+            ],
+        )
+        self.conn.commit()
+
+    def record_bfbm_bet_notification(self, item: dict[str, Any]) -> None:
+        bet_id = str(item.get("bet_id") or "").strip()
+        if not bet_id:
+            return
+        self.conn.execute(
+            """
+            insert or ignore into bfbm_bet_notifications (
+                bet_id, size_matched, success, strategy, raw_line
+            ) values (?, ?, ?, ?, ?)
+            """,
+            (
+                bet_id,
+                str(item.get("size_matched") or ""),
+                str(item.get("success") or ""),
+                str(item.get("strategy") or ""),
+                str(item.get("line") or ""),
+            ),
+        )
         self.conn.commit()
 
     def replace_bfbm_markets(self, rows: list[dict[str, Any]]) -> int:
@@ -382,6 +490,82 @@ class Storage:
             "performance_betted": self.performance(),
             "by_market": by_market,
             "recent": recent,
+        }
+
+    def bfbm_export_report(self, limit: int = 100, hours: int = 24) -> dict[str, Any]:
+        limit = max(1, limit)
+        hours = max(1, hours)
+        summary = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                select status, reason, count(*) as total,
+                       min(first_seen_at) as first_seen_at,
+                       max(last_seen_at) as last_seen_at
+                from bfbm_export_audit
+                where first_seen_at >= datetime('now', ?)
+                group by status, reason
+                order by total desc, last_seen_at desc
+                """,
+                (f"-{hours} hours",),
+            ).fetchall()
+        ]
+        recent = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                select a.id as alert_id, a.created_at as alert_created_at,
+                       e.first_seen_at, e.last_seen_at, e.seen_count,
+                       e.endpoint, e.status as export_status, e.reason,
+                       a.home, a.away, a.minute, a.market, a.selection, a.line,
+                       e.bfbm_event_name, e.bfbm_market_name, e.bfbm_selection_name,
+                       e.bfbm_event_id, e.bfbm_market_id, e.bfbm_selection_id,
+                       e.bfbm_start_time, a.status as alert_status, a.user_action
+                from bfbm_export_audit e
+                left join alerts a on a.id = e.alert_id
+                where e.first_seen_at >= datetime('now', ?)
+                order by e.last_seen_at desc, e.id desc
+                limit ?
+                """,
+                (f"-{hours} hours", limit),
+            ).fetchall()
+        ]
+        sent_without_audit = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                select id, created_at, home, away, minute, market, selection, line,
+                       status, user_action
+                from alerts
+                where created_at >= datetime('now', ?)
+                  and id not in (
+                      select alert_id from bfbm_export_audit where alert_id is not null
+                  )
+                order by id desc
+                limit ?
+                """,
+                (f"-{hours} hours", limit),
+            ).fetchall()
+        ]
+        bets = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                select *
+                from bfbm_bet_notifications
+                where created_at >= datetime('now', ?)
+                order by id desc
+                limit ?
+                """,
+                (f"-{hours} hours", limit),
+            ).fetchall()
+        ]
+        return {
+            "window_hours": hours,
+            "summary": summary,
+            "recent_exports": recent,
+            "sent_without_export_audit": sent_without_audit,
+            "bet_notifications": bets,
         }
 
     def export_json(self) -> str:

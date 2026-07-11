@@ -15,7 +15,7 @@ from telegram.error import BadRequest, Conflict
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
-from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
+from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, full_rows_with_audit, rows_to_full_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
 from .bfbm_markets import _event_score, find_bfbm_market, market_family, market_line, payload_to_markets
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import load_settings, require_runtime_settings, require_telegram_settings, settings_presence
@@ -403,6 +403,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/markets.json",
             "/bfbm/live-overlap.json",
             "/bfbm/strategy-report.json",
+            "/bfbm/export-audit.json",
             "/bfbm/notify-bet",
             "/health",
         }:
@@ -466,6 +467,29 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if parsed.path == "/bfbm/export-audit.json":
+            query = parse_qs(parsed.query)
+            try:
+                limit = int(query.get("limit", ["100"])[0])
+            except ValueError:
+                limit = 100
+            try:
+                hours = int(query.get("hours", ["24"])[0])
+            except ValueError:
+                hours = 24
+            storage = Storage(settings.database_path)
+            try:
+                data = storage.bfbm_export_report(limit=max(10, min(500, limit)), hours=max(1, min(168, hours)))
+            finally:
+                storage.close()
+            body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if parsed.path == "/bfbm/create-live-00-goals":
             try:
                 created_count, events = asyncio.run(create_live_bfbm_zero_zero_goal_tests(settings, 4))
@@ -510,6 +534,19 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             if raw_line:
                 text += f"\n\nLog: {raw_line[:500]}"
             try:
+                storage = Storage(settings.database_path)
+                try:
+                    storage.record_bfbm_bet_notification(
+                        {
+                            "bet_id": bet_id,
+                            "size_matched": size_matched,
+                            "success": success,
+                            "strategy": strategy,
+                            "line": raw_line,
+                        }
+                    )
+                finally:
+                    storage.close()
                 require_telegram_settings(settings)
                 asyncio.run(send_message(settings.telegram_bot_token, settings.telegram_chat_id, text))
                 body = b"sent\n"
@@ -674,7 +711,13 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             finally:
                 storage.close()
             if parsed.path == "/bfbm/live-full.csv":
-                body = tips_full_csv(alerts, config, catalog_rows).encode("utf-8-sig")
+                rows, audits = full_rows_with_audit(alerts, config, catalog_rows, parsed.path)
+                storage = Storage(settings.database_path)
+                try:
+                    storage.record_bfbm_export_audit(audits)
+                finally:
+                    storage.close()
+                body = rows_to_full_csv(rows).encode("utf-8-sig")
             elif parsed.path == "/bfbm/live-rich.csv":
                 body = tips_rich_csv(alerts, config, catalog_rows).encode("utf-8-sig")
             elif parsed.path == "/bfbm/live-clean.csv":
