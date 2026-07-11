@@ -40,6 +40,8 @@ MARKET_LABELS = {
     ("goals", "under"): "Menos gols",
     ("corners", "over"): "Mais escanteios",
     ("corners", "under"): "Menos escanteios",
+    ("btts", "yes"): "Ambos marcam",
+    ("btts", "no"): "Ambos marcam",
 }
 
 

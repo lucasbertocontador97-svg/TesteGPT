@@ -62,4 +62,10 @@ async def settle_alert(
     away = goals.get("away")
     if home is None or away is None:
         return None
+    if "ambos" in market or "btts" in market or "marcam" in market:
+        both_scored = int(home) > 0 and int(away) > 0
+        if selection in {"yes", "sim"}:
+            return ("WON", "Ambos os times marcaram.") if both_scored else ("LOST", "Um dos times nao marcou.")
+        if selection in {"no", "nao", "não"}:
+            return ("LOST", "Ambos os times marcaram.") if both_scored else ("WON", "Um dos times nao marcou.")
     return _settle_total(int(home) + int(away), selection, line)

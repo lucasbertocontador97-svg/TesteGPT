@@ -192,10 +192,27 @@ def _match_odds_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     }
 
 
+def _btts_tip(alert: dict[str, Any]) -> dict[str, str] | None:
+    selection = str(alert.get("selection", "") or "").strip().lower()
+    if selection in {"yes", "sim"}:
+        selection_name = "Sim"
+    elif selection in {"no", "nao", "não"}:
+        selection_name = "Não"
+    else:
+        return None
+    return {
+        "MarketType": "BOTH_TEAMS_TO_SCORE",
+        "MarketName": "Ambos os times marcam?",
+        "SelectionName": selection_name,
+    }
+
+
 def _tip_market(alert: dict[str, Any]) -> dict[str, str] | None:
     market = str(alert.get("market", "")).lower()
     if any(word in market for word in ("resultado", "match odds", "vitoria", "vitória")):
         return _match_odds_tip(alert)
+    if any(word in market for word in ("btts", "ambos", "marcam")):
+        return _btts_tip(alert)
     if any(word in market for word in ("goal", "gol")):
         return _goal_tip(alert)
     if any(word in market for word in ("corner", "escanteio")):
@@ -241,6 +258,9 @@ def _selection_for_catalog_market(row: dict[str, str], market: dict[str, Any]) -
     selection = row.get("SelectionName", "")
     if family == "match_odds":
         return map_selection_to_event(selection, str(market.get("event_name") or ""))
+    if family == "btts":
+        original = selection.lower()
+        return "Não" if "nao" in original or "não" in original or original == "no" else "Sim"
     if family in {"goals", "corners"}:
         line = market_line(str(market.get("market_name") or "")) or _num(row.get("line"))
         line_text = _bfbm_line_text(line) if line is not None else ""

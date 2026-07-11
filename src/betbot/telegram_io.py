@@ -10,7 +10,7 @@ def _line_label(line: float | None) -> str:
 
 
 def _selection_label(selection: str) -> str:
-    labels = {"over": "Mais", "under": "Menos"}
+    labels = {"over": "Mais", "under": "Menos", "yes": "Sim", "no": "Não"}
     return labels.get(selection.lower(), selection)
 
 

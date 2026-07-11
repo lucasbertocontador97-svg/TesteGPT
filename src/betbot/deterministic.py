@@ -121,6 +121,12 @@ def _under_goal_conviction(probability_score: int, minute: int, total_shots: flo
     return min(95, probability_score + bonus)
 
 
+def _has_market_family(available_markets: list[tuple[str, float | None]] | None, family: str) -> bool:
+    if available_markets is None:
+        return True
+    return any(market_family == family for market_family, _line in available_markets)
+
+
 def _effective_pressure(dangerous: float, attacks: float, total_shots: float, shots_on: float) -> tuple[float, str]:
     if dangerous > 0:
         return dangerous, f"ataques perigosos {dangerous:g}"
@@ -285,10 +291,61 @@ def _next_corner_window(minute: int) -> tuple[str, float] | None:
     return None
 
 
+def _btts_yes_conviction(
+    probability_score: int,
+    minute: int,
+    current_goals: int,
+    total_shots: float,
+    shots_on: float,
+    pressure: float,
+) -> int:
+    bonus = 0
+    if 50 <= minute <= 78:
+        bonus += 5
+    if current_goals >= 1:
+        bonus += 6
+    if shots_on >= 6:
+        bonus += 12
+    elif shots_on >= 4:
+        bonus += 8
+    if total_shots >= 16:
+        bonus += 10
+    elif total_shots >= 12:
+        bonus += 6
+    if pressure >= 70:
+        bonus += 10
+    elif pressure >= 55:
+        bonus += 6
+    return min(95, probability_score + bonus)
+
+
+def _btts_no_conviction(
+    probability_score: int,
+    minute: int,
+    total_shots: float,
+    shots_on: float,
+    pressure: float,
+) -> int:
+    bonus = 0
+    if minute >= 72:
+        bonus += 10
+    elif minute >= 65:
+        bonus += 6
+    if total_shots <= 9:
+        bonus += 8
+    if shots_on <= 3:
+        bonus += 8
+    if pressure <= 45:
+        bonus += 6
+    return min(95, probability_score + bonus)
+
+
 def _candidate_priority(signal: DeterministicSignal) -> int:
     if signal.strategy in {"GOAL_OVER_05_HT", "GOAL_OVER_05_FT"}:
         return 5
     if signal.strategy == "GOAL_NEXT_LINE_FT":
+        return 4
+    if signal.strategy.startswith("BTTS_"):
         return 4
     if signal.strategy.startswith("CORNER_"):
         return 3
@@ -428,6 +485,46 @@ def evaluate_game(
                     )
                 )
                 break
+
+    if _has_market_family(available_markets, "btts"):
+        both_scored = score_home > 0 and score_away > 0
+        one_side_blank = (score_home == 0) != (score_away == 0)
+        if one_side_blank and 50 <= minute <= 80:
+            prob_other_scores = _poisson_at_least(goal_mean, 1)
+            score = round(prob_other_scores * 100)
+            conviction = _btts_yes_conviction(score, minute, current_goals, total_shots, shots_on, pressure)
+            if prob_other_scores >= 0.50 and conviction >= max(min_confidence, 76):
+                candidates.append(
+                    DeterministicSignal(
+                        True,
+                        "btts",
+                        "yes",
+                        None,
+                        prob_other_scores,
+                        conviction,
+                        conviction,
+                        f"BTTS sim: falta um time marcar e ha probabilidade {prob_other_scores:.0%} de mais gol; chutes {total_shots:g}, no gol {shots_on:g} e {pressure_label}.",
+                        "BTTS_YES_LIVE",
+                    )
+                )
+        if not both_scored and minute >= 65 and (dead_game or (total_shots <= 10 and shots_on <= 3 and pressure <= 45)):
+            prob_no_more_goal = _poisson_at_most(goal_mean, 0)
+            score = round(prob_no_more_goal * 100)
+            conviction = _btts_no_conviction(score, minute, total_shots, shots_on, pressure)
+            if prob_no_more_goal >= 0.62 and conviction >= max(min_confidence, 78):
+                candidates.append(
+                    DeterministicSignal(
+                        True,
+                        "btts",
+                        "no",
+                        None,
+                        prob_no_more_goal,
+                        conviction,
+                        conviction,
+                        f"BTTS nao: jogo frio e probabilidade {prob_no_more_goal:.0%} de nao sair novo gol; chutes {total_shots:g}, no gol {shots_on:g} e {pressure_label}.",
+                        "BTTS_NO_LIVE",
+                    )
+                )
 
     if 58 <= minute <= 86 and current_goals > 0:
         next_goal_line = current_goals + 0.5
