@@ -402,6 +402,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/create-live-00-goals",
             "/bfbm/markets.json",
             "/bfbm/live-overlap.json",
+            "/bfbm/strategy-report.json",
             "/bfbm/notify-bet",
             "/health",
         }:
