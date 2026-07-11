@@ -165,6 +165,7 @@ def _goal_tip(alert: dict[str, Any]) -> dict[str, str] | None:
         "MarketType": market_type,
         "MarketName": f"Mais/Menos de {display_line} Gols",
         "SelectionName": f"{side} de {display_line} Gols",
+        "__line": str(line),
     }
 
 
@@ -178,6 +179,7 @@ def _corner_tip(alert: dict[str, Any]) -> dict[str, str] | None:
         "MarketType": "COMBINED_TOTAL",
         "MarketName": f"Mais/Menos de {_bfbm_line_text(line)} Escanteios",
         "SelectionName": f"{'Mais' if side == 'Over' else 'Menos'} de {_bfbm_line_text(line)} escanteios",
+        "__line": str(line),
     }
 
 
@@ -249,6 +251,7 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
         "MinPrice": f"{config.min_price:.2f}",
         "MaxPrice": "100.00" if is_match_odds else f"{config.max_price:.2f}",
         "BSP": "False",
+        "__line": market.get("__line", ""),
     }
     return row
 
@@ -262,7 +265,7 @@ def _selection_for_catalog_market(row: dict[str, str], market: dict[str, Any]) -
         original = selection.lower()
         return "Não" if "nao" in original or "não" in original or original == "no" else "Sim"
     if family in {"goals", "corners"}:
-        line = market_line(str(market.get("market_name") or "")) or _num(row.get("line"))
+        line = market_line(str(market.get("market_name") or "")) or _num(row.get("__line") or row.get("line") or row.get("Line"))
         line_text = _bfbm_line_text(line) if line is not None else ""
         original = selection.lower()
         side = "Menos" if "menos" in original or "under" in original else "Mais"
@@ -338,6 +341,7 @@ def full_rows_with_audit(
     config: BfbmConfig,
     catalog_rows: list[dict[str, Any]] | None = None,
     endpoint: str = "/bfbm/live-full.csv",
+    allow_name_fallback: bool = False,
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     rows: list[dict[str, str]] = []
     audits: list[dict[str, Any]] = []
@@ -350,7 +354,7 @@ def full_rows_with_audit(
         if catalog_rows:
             matched = enrich_row_from_bfbm_catalog(row, catalog_rows)
             if not matched:
-                if _has_matchable_names(row):
+                if allow_name_fallback and _has_matchable_names(row):
                     rows.append(row)
                     audits.append(_audit_row(alert, endpoint, "EXPORTED", "exported_without_catalog_match_bfbm_may_fill", row))
                     continue
@@ -358,7 +362,7 @@ def full_rows_with_audit(
                 continue
             row = matched
         if not _has_valid_export_ids(row):
-            if _has_matchable_names(row):
+            if allow_name_fallback and _has_matchable_names(row):
                 rows.append(row)
                 audits.append(_audit_row(alert, endpoint, "EXPORTED", "exported_without_ids_bfbm_may_fill", row))
                 continue

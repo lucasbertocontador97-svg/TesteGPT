@@ -309,7 +309,18 @@ def find_bfbm_market(
             continue
         if desired_line is not None:
             row_line = market_line(str(row.get("market_name") or ""))
-            if row_line is None or abs(row_line - desired_line) > 0.01:
+            market_type = normalize_text(row.get("market_type", ""))
+            market_name = normalize_text(row.get("market_name", ""))
+            generic_line_market = (
+                desired_family == "goals"
+                and row_line is None
+                and ("alt_total_goals" in market_type or "linhas de gol" in market_name)
+            ) or (
+                desired_family == "corners"
+                and row_line is None
+                and ("corner" in market_type or "corners total" in market_name or "escanteio" in market_name)
+            )
+            if not generic_line_market and (row_line is None or abs(row_line - desired_line) > 0.01):
                 continue
         score = _event_score(event_name, str(row.get("event_name") or ""))
         if score < 55:

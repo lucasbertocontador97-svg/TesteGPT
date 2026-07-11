@@ -68,11 +68,20 @@ def bfbm_available_market_specs(catalog_rows: list[dict], event_name: str, min_s
             continue
         family = market_family(str(row.get("market_name") or ""))
         line = market_line(str(row.get("market_name") or ""))
-        key = (family, line)
-        if key in seen:
-            continue
-        seen.add(key)
-        specs.append(key)
+        market_type = str(row.get("market_type") or "").casefold()
+        market_name = str(row.get("market_name") or "").casefold()
+        if family == "goals" and line is None and ("alt_total_goals" in market_type or "linhas de gol" in market_name):
+            candidate_lines = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]
+        elif family == "corners" and line is None and ("corner" in market_type or "corners total" in market_name or "escanteio" in market_name):
+            candidate_lines = [float(value) + 0.5 for value in range(0, 16)]
+        else:
+            candidate_lines = [line]
+        for candidate_line in candidate_lines:
+            key = (family, candidate_line)
+            if key in seen:
+                continue
+            seen.add(key)
+            specs.append(key)
     return specs
 
 
@@ -732,7 +741,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 catalog_rows = storage.bfbm_markets(15)
             finally:
                 storage.close()
-            if parsed.path == "/bfbm/live-full.csv":
+            if parsed.path in {"/bfbm/live-full.csv", "/bfbm/tips.csv"}:
                 rows, audits = full_rows_with_audit(alerts, config, catalog_rows, parsed.path)
                 storage = Storage(settings.database_path)
                 try:

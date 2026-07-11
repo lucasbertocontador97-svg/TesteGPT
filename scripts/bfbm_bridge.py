@@ -579,7 +579,7 @@ def main() -> None:
     parser.add_argument("--max-price", type=float, default=100.00)
     parser.add_argument("--max-tips", type=int, default=4)
     parser.add_argument("--tip-keep-seconds", type=int, default=600)
-    parser.add_argument("--allow-missing-ids", action="store_true", default=True, help="Permite enviar tips sem EventId/MarketId/SelectionId.")
+    parser.add_argument("--allow-missing-ids", action="store_true", help="Permite enviar tips sem EventId/MarketId/SelectionId.")
     parser.add_argument("--require-ids", action="store_true", help="Exige EventId e MarketId antes de repassar ao BFBM.")
     parser.add_argument(
         "--log-path",
@@ -597,7 +597,7 @@ def main() -> None:
         max_price=args.max_price,
         max_tips=args.max_tips,
         tip_keep_seconds=args.tip_keep_seconds,
-        require_ids=args.require_ids,
+        require_ids=args.require_ids or not args.allow_missing_ids,
     )
     if args.source_url:
         threading.Thread(target=source_loop, args=(state, args.source_url, args.source_poll_seconds), daemon=True).start()
