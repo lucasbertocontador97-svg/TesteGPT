@@ -493,10 +493,13 @@ def monitor_bfbm_log(
             sid = match.group("sid").strip()
             if sid_filter and sid_filter.casefold() not in sid.casefold():
                 continue
+            size_matched = match.group("size").strip()
+            if _float(size_matched) <= 0:
+                continue
             item = {
                 "placed_at": match.group("placed_at").strip(),
                 "bet_id": match.group("bet_id").strip(),
-                "size_matched": match.group("size").strip(),
+                "size_matched": size_matched,
                 "success": match.group("success").strip(),
                 "strategy": match.group("strategy").strip(),
                 "sid": sid,

@@ -16,6 +16,7 @@ $Bridge = Join-Path $RepoRoot "scripts\bfbm_bridge.py"
     --source-url $SourceUrl `
     --source-poll-seconds 20 `
     --notify-url $NotifyUrl `
+    --notify-sid-filter "CODEX-TESTEGPT" `
     --min-price 1.80 `
     --max-price 100.00 `
     --max-tips 12 `

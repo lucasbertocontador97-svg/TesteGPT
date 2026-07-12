@@ -34,6 +34,13 @@ function Send-BfbmNotification([string]$Line) {
     if ($SidFilter -and ($sid -notlike "*$SidFilter*")) {
         return
     }
+    $matchedNumber = 0.0
+    if (-not [double]::TryParse($sizeMatched.Replace(",", "."), [System.Globalization.NumberStyles]::Any, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$matchedNumber)) {
+        $matchedNumber = 0.0
+    }
+    if ($matchedNumber -le 0) {
+        return
+    }
 
     $dedupeKey = if ($betId) { $betId } else { $Line }
     if ($seen.ContainsKey($dedupeKey)) {
