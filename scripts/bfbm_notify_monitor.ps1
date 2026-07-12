@@ -2,7 +2,8 @@ param(
     [string]$LogPath = "$env:LOCALAPPDATA\bfbotmanager.com\Bf Bot Manager V3\log.txt",
     [Parameter(Mandatory = $true)]
     [string]$NotifyUrl,
-    [int]$PollSeconds = 2
+    [int]$PollSeconds = 2,
+    [string]$SidFilter = "CODEX-TESTEGPT"
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +31,9 @@ function Send-BfbmNotification([string]$Line) {
     if ($Line -match "success:\s*([^,]+)") { $success = $Matches[1].Trim() }
     if ($Line -match "strategy:\s*([^,]+)") { $strategy = $Matches[1].Trim() }
     if ($Line -match "sid:\s*(.+)$") { $sid = $Matches[1].Trim() }
+    if ($SidFilter -and ($sid -notlike "*$SidFilter*")) {
+        return
+    }
 
     $dedupeKey = if ($betId) { $betId } else { $Line }
     if ($seen.ContainsKey($dedupeKey)) {

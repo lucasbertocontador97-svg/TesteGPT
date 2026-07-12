@@ -470,7 +470,13 @@ BET_RE = re.compile(
 )
 
 
-def monitor_bfbm_log(state: BridgeState, log_path: Path, notify_url: str | None, poll_seconds: int) -> None:
+def monitor_bfbm_log(
+    state: BridgeState,
+    log_path: Path,
+    notify_url: str | None,
+    poll_seconds: int,
+    sid_filter: str,
+) -> None:
     if not log_path.exists():
         print(f"[log] arquivo nao encontrado: {log_path}")
         return
@@ -484,13 +490,16 @@ def monitor_bfbm_log(state: BridgeState, log_path: Path, notify_url: str | None,
             match = BET_RE.search(line)
             if not match:
                 continue
+            sid = match.group("sid").strip()
+            if sid_filter and sid_filter.casefold() not in sid.casefold():
+                continue
             item = {
                 "placed_at": match.group("placed_at").strip(),
                 "bet_id": match.group("bet_id").strip(),
                 "size_matched": match.group("size").strip(),
                 "success": match.group("success").strip(),
                 "strategy": match.group("strategy").strip(),
-                "sid": match.group("sid").strip(),
+                "sid": sid,
                 "line": line.strip(),
             }
             if not state.register_bet_notification(item):
@@ -576,6 +585,7 @@ def main() -> None:
     parser.add_argument("--source-url", default="")
     parser.add_argument("--source-poll-seconds", type=int, default=20)
     parser.add_argument("--notify-url", default="")
+    parser.add_argument("--notify-sid-filter", default="CODEX-TESTEGPT")
     parser.add_argument("--api-token", default="")
     parser.add_argument("--min-price", type=float, default=1.80)
     parser.add_argument("--max-price", type=float, default=100.00)
@@ -603,7 +613,11 @@ def main() -> None:
     )
     if args.source_url:
         threading.Thread(target=source_loop, args=(state, args.source_url, args.source_poll_seconds), daemon=True).start()
-    threading.Thread(target=monitor_bfbm_log, args=(state, Path(args.log_path), args.notify_url or None, 2), daemon=True).start()
+    threading.Thread(
+        target=monitor_bfbm_log,
+        args=(state, Path(args.log_path), args.notify_url or None, 2, args.notify_sid_filter),
+        daemon=True,
+    ).start()
 
     server = ThreadingHTTPServer((args.host, args.port), make_handler(state, args.api_token or None))
     print(f"Ponte BFBM ativa: http://{args.host}:{args.port}/tips.csv")
