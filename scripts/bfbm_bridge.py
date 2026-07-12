@@ -504,6 +504,7 @@ def monitor_bfbm_log(
                 "strategy": match.group("strategy").strip(),
                 "sid": sid,
                 "line": line.strip(),
+                "tips_snapshot": json.dumps(state.status().get("current_rows", []), ensure_ascii=False),
             }
             if not state.register_bet_notification(item):
                 continue

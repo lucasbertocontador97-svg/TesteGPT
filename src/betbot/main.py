@@ -49,6 +49,56 @@ def market_label(market_family: str, selection: str) -> str:
     return MARKET_LABELS.get((market_family, selection), f"{market_family} {selection}")
 
 
+def _format_bfbm_confirmed_tip_candidates(storage: Storage, settings, limit: int = 3) -> str:
+    tips = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes, limit=limit)
+    if not tips:
+        return "Tip: nao encontrei tip ativa recente no banco."
+
+    lines = ["Tip enviada ao BFBM:" if len(tips) == 1 else "Tips ativas enviadas ao BFBM:"]
+    for tip in tips:
+        line = tip.get("line")
+        if line in (None, ""):
+            line_text = ""
+        elif isinstance(line, (int, float)):
+            line_text = f" {line:g}"
+        else:
+            line_text = f" {line}"
+        score = f"{tip.get('score_home', '?')}x{tip.get('score_away', '?')}"
+        minute = tip.get("minute")
+        minute_text = "?" if minute in (None, "") else f"{minute}'"
+        lines.append(
+            "- "
+            f"{tip.get('home', '?')} x {tip.get('away', '?')} | "
+            f"{minute_text} {score} | "
+            f"{tip.get('market', '?')}{line_text} | "
+            f"{tip.get('selection', '?')} | "
+            f"conf {tip.get('confidence', '?')}"
+        )
+    return "\n".join(lines)
+
+
+def _format_bfbm_snapshot(snapshot_text: str) -> str | None:
+    if not snapshot_text:
+        return None
+    try:
+        rows = json.loads(snapshot_text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(rows, list) or not rows:
+        return None
+    lines = ["Tip ativa no BFBM:" if len(rows) == 1 else "Tips ativas no BFBM:"]
+    for row in rows[:5]:
+        if not isinstance(row, dict):
+            continue
+        lines.append(
+            "- "
+            f"{row.get('event', '?')} | "
+            f"{row.get('market', '?')} | "
+            f"{row.get('selection', '?')}"
+        )
+    return "\n".join(lines)
+
+
 def verified_alert_key(game: GameSnapshot, market_family: str, selection: str, line: float | None) -> str:
     return f"verified|{game.fixture_id}|{market_family}|{selection}|{line}"
 
@@ -611,6 +661,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             sid = query.get("sid", [""])[0].strip()
             silent = query.get("silent", [""])[0].strip().lower() in {"1", "true", "yes", "sim"}
             raw_line = query.get("line", [""])[0].strip()
+            tips_snapshot = query.get("tips_snapshot", [""])[0].strip()
             placed_at_iso = ""
             if placed_at:
                 try:
@@ -622,7 +673,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 matched = float(size_matched.replace(",", ".") or "0") > 0
             except ValueError:
                 matched = False
-            title = "\u2705 APOSTA FEITA NO BFBM" if matched else "\u26a0\ufe0f APOSTA ENVIADA AO BFBM"
+            title = "\u2705 APOSTA FEITA NO BFBM" if matched else "\u26a0\ufe0f APOSTA NAO CASADA NO BFBM"
             text = (
                 f"{title}\n\n"
                 f"Bet ID: {bet_id or '-'}\n"
@@ -637,6 +688,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             try:
                 storage = Storage(settings.database_path)
                 try:
+                    tips_text = _format_bfbm_confirmed_tip_candidates(storage, settings)
                     storage.record_bfbm_bet_notification(
                         {
                             "bet_id": bet_id,
@@ -651,7 +703,9 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                     )
                 finally:
                     storage.close()
-                if not silent:
+                if matched and not silent:
+                    snapshot_text = _format_bfbm_snapshot(tips_snapshot)
+                    text += f"\n\n{snapshot_text or tips_text}"
                     require_telegram_settings(settings)
                     asyncio.run(send_message(settings.telegram_bot_token, settings.telegram_chat_id, text))
                 body = b"sent\n"
@@ -1225,7 +1279,9 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 logger.info("Entrada repetida ignorada apos insert: %s", decision.alert_key)
                 continue
             message = format_alert(game, decision)
-            if settings.dry_run or not send_alerts:
+            if settings.bfbm_export:
+                logger.info("Alerta salvo para BFBM sem Telegram ate confirmacao de aposta:\n%s", message)
+            elif settings.dry_run or not send_alerts:
                 logger.info("DRY_RUN alerta:\n%s", message)
             else:
                 await send_message(
