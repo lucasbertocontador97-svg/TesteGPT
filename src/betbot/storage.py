@@ -469,7 +469,15 @@ class Storage:
 
     def pending_alerts(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
-            "select * from alerts where status = 'SENT' and user_action = 'BET' and fixture_id is not null and odd > 0"
+            """
+            select *
+            from alerts
+            where status = 'SENT'
+              and user_action != 'IGNORED'
+              and created_at <= datetime('now', '-5 minutes')
+            order by id asc
+            limit 50
+            """
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -503,13 +511,16 @@ class Storage:
         )
         self.conn.commit()
 
-    def performance(self) -> dict[str, Any]:
-        rows = self.conn.execute("select status, count(*) as total from alerts where user_action = 'BET' group by status").fetchall()
+    def _performance_where(self, where_clause: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
+        rows = self.conn.execute(
+            f"select status, count(*) as total from alerts where {where_clause} group by status",
+            params,
+        ).fetchall()
         summary = {row["status"]: row["total"] for row in rows}
         settled = summary.get("WON", 0) + summary.get("LOST", 0) + summary.get("PUSH", 0)
         win_rate = round(summary.get("WON", 0) / settled * 100, 2) if settled else 0.0
         profit = self.conn.execute(
-            """
+            f"""
             select coalesce(sum(
                 case
                     when status = 'WON' then odd - 1
@@ -518,8 +529,9 @@ class Storage:
                 end
             ), 0) as profit
             from alerts
-            where user_action = 'BET'
-            """
+            where {where_clause}
+            """,
+            params,
         ).fetchone()["profit"]
         action_rows = self.conn.execute("select user_action, count(*) as total from alerts group by user_action").fetchall()
         actions = {row["user_action"]: row["total"] for row in action_rows}
@@ -530,6 +542,12 @@ class Storage:
             "win_rate": win_rate,
             "profit_units": round(float(profit), 2),
         }
+
+    def performance(self) -> dict[str, Any]:
+        return self._performance_where("user_action = 'BET'")
+
+    def signal_performance(self) -> dict[str, Any]:
+        return self._performance_where("user_action != 'IGNORED'")
 
     def strategy_report(self, limit: int = 80) -> dict[str, Any]:
         total = self.conn.execute("select count(*) as total from alerts").fetchone()["total"]
@@ -576,6 +594,7 @@ class Storage:
             "by_status": by_status,
             "by_action": by_action,
             "performance_betted": self.performance(),
+            "performance_all_signals": self.signal_performance(),
             "by_market": by_market,
             "recent": recent,
         }

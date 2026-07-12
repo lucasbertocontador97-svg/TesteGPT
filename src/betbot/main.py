@@ -1225,7 +1225,13 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
 
         pending_alerts = storage.pending_alerts()
         totalcorner_today = []
-        if any("corner" in str(alert.get("market", "")).lower() or "escanteio" in str(alert.get("market", "")).lower() for alert in pending_alerts):
+        needs_totalcorner_settlement = any(
+            not alert.get("fixture_id")
+            or "corner" in str(alert.get("market", "")).lower()
+            or "escanteio" in str(alert.get("market", "")).lower()
+            for alert in pending_alerts
+        )
+        if needs_totalcorner_settlement:
             totalcorner_today = await load_totalcorner_today(settings, http)
         for alert in pending_alerts:
             result = await settle_alert(alert, api_football, totalcorner_today)
