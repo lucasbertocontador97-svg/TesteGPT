@@ -44,10 +44,44 @@ def post_json(url: str, payload: dict, timeout: int = 15) -> str:
         return response.read().decode("utf-8", errors="replace")
 
 
-def scan_once(export_path: Path, snapshot_path: Path, post_url: str | None, market_export_path: Path | None = None) -> tuple[int, str]:
+def _strip_live_state_when_stale(markets: list, *, stale: bool) -> list:
+    if not stale:
+        return markets
+    cleaned = []
+    for item in markets:
+        cleaned.append(
+            type(item)(
+                event_name=item.event_name,
+                market_name=item.market_name,
+                event_id=item.event_id,
+                market_id=item.market_id,
+                market_type=item.market_type,
+                status="",
+                start_time=item.start_time,
+                live_score="",
+                live_time="",
+                favorite=item.favorite,
+                winner=item.winner,
+                total_matched=item.total_matched,
+                raw=item.raw,
+            )
+        )
+    return cleaned
+
+
+def scan_once(
+    export_path: Path,
+    snapshot_path: Path,
+    post_url: str | None,
+    market_export_path: Path | None = None,
+    max_visible_age_seconds: int = 10 * 60,
+) -> tuple[int, str]:
     text = read_text(export_path)
-    markets = parse_exported_markets_csv(text)
-    stat = export_path.stat()
+    export_stat = export_path.stat()
+    visible_age_seconds = max(0.0, time.time() - export_stat.st_mtime)
+    visible_is_stale = visible_age_seconds > max(30, max_visible_age_seconds)
+    markets = _strip_live_state_when_stale(parse_exported_markets_csv(text), stale=visible_is_stale)
+    stat = export_stat
     if market_export_path and market_export_path.exists():
         catalog_text = read_text(market_export_path)
         catalog = parse_exported_market_catalog_csv(catalog_text)
@@ -63,6 +97,9 @@ def scan_once(export_path: Path, snapshot_path: Path, post_url: str | None, mark
         source_modified_at=modified_at,
         source_age_seconds=age_seconds,
     )
+    payload["visible_source_age_seconds"] = visible_age_seconds
+    payload["visible_source_stale"] = visible_is_stale
+    payload["visible_source_max_age_seconds"] = max_visible_age_seconds
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     result = "local-only"
@@ -83,6 +120,7 @@ def main() -> int:
     parser.add_argument("--post-url", default="", help="URL Railway /bfbm/markets/snapshot?token=...")
     parser.add_argument("--poll-seconds", type=int, default=5)
     parser.add_argument("--post-interval-seconds", type=int, default=60)
+    parser.add_argument("--max-visible-age-seconds", type=int, default=600)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
 
@@ -103,7 +141,13 @@ def main() -> int:
             now = time.time()
             should_post = args.once or signature != last_signature or (post_url and now - last_post_at >= max(5, args.post_interval_seconds))
             if should_post:
-                count, result = scan_once(export_path, snapshot_path, post_url, market_export_path)
+                count, result = scan_once(
+                    export_path,
+                    snapshot_path,
+                    post_url,
+                    market_export_path,
+                    max_visible_age_seconds=args.max_visible_age_seconds,
+                )
                 print(f"[scanner] mercados={count} envio={result}", flush=True)
                 last_signature = signature
                 last_post_at = now
