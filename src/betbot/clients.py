@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class HttpJsonClient:
@@ -249,31 +252,56 @@ class TheStatsApiClient:
 
 class TotalCornerClient:
     base_url = "https://api.totalcorner.com/v1"
-    live_columns = "events,odds,asian,cornerLine,goalLine,asianCorner,attacks,dangerousAttacks,shotOn,shotOff,possession"
+    # TotalCorner can return 0/1 rows when unsupported column combinations are
+    # requested. dangerousAttacks was verified to keep the full in-play list and
+    # gives the motor a useful pressure signal beyond score/corners.
+    live_columns = "dangerousAttacks"
 
     def __init__(self, token: str, http: HttpJsonClient) -> None:
         self.token = token
         self.http = http
 
+    @staticmethod
+    def _data_items(data: Any) -> list[dict[str, Any]]:
+        if not isinstance(data, dict):
+            return []
+        error = data.get("error")
+        if data.get("success") == 0 and error:
+            message = ""
+            if isinstance(error, dict):
+                message = str(error.get("message") or error.get("code") or "")
+            raise RuntimeError(message or "TotalCorner returned error payload")
+        items = data.get("data", [])
+        return items if isinstance(items, list) else []
+
     async def today_inplay(self, limit: int = 100) -> list[dict[str, Any]]:
-        data = await self.http.get_json(
+        try:
+            enriched_data = await self.http.get_json(
+                f"{self.base_url}/match/today",
+                params={"token": self.token, "type": "inplay", "columns": self.live_columns},
+            )
+            enriched_items = self._data_items(enriched_data)
+            if enriched_items:
+                return enriched_items[:limit]
+        except Exception as exc:
+            logger.warning("TotalCorner enriched in-play failed; falling back to basic feed: %s", exc)
+            await asyncio.sleep(3)
+        basic_data = await self.http.get_json(
             f"{self.base_url}/match/today",
-            params={"token": self.token, "type": "inplay", "columns": self.live_columns},
+            params={"token": self.token, "type": "inplay"},
         )
-        items = data.get("data", []) if isinstance(data, dict) else []
-        return items[:limit] if isinstance(items, list) else []
+        return self._data_items(basic_data)[:limit]
 
     async def today_all(self, limit: int = 200) -> list[dict[str, Any]]:
         data = await self.http.get_json(
             f"{self.base_url}/match/today",
             params={"token": self.token, "columns": self.live_columns},
         )
-        items = data.get("data", []) if isinstance(data, dict) else []
-        return items[:limit] if isinstance(items, list) else []
+        return self._data_items(data)[:limit]
 
     async def diagnostic(self) -> list[dict[str, Any]]:
         checks = [
-            ("match/today inplay", f"{self.base_url}/match/today", {"token": self.token, "type": "inplay"}),
+            ("match/today inplay básico", f"{self.base_url}/match/today", {"token": self.token, "type": "inplay"}),
             (
                 "match/today inplay com stats",
                 f"{self.base_url}/match/today",

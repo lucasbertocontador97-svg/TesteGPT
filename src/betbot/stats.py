@@ -122,7 +122,7 @@ def compact_totalcorner_statistics(match: dict[str, Any]) -> dict[str, Any]:
         (("shot_on", "shotOn"), "Shots on Goal"),
         (("shot_off", "shotOff"), "Shots off Goal"),
         (("attacks",), "Attacks"),
-        (("dangerous_attacks", "dangerousAttacks", "dangerous"), "Dangerous Attacks"),
+        (("dang_attacks", "dangerous_attacks", "dangerousAttacks", "dangerous"), "Dangerous Attacks"),
         (("possess", "possession"), "Ball Possession"),
     ]
     for keys, target in pair_fields:
