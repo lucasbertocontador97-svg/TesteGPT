@@ -301,12 +301,14 @@ def find_bfbm_market(
     desired_family: str,
     desired_line: float | None = None,
 ) -> dict[str, Any] | None:
-    best: tuple[int, dict[str, Any]] | None = None
+    best: tuple[int, int, float, dict[str, Any]] | None = None
     for row in catalog_rows:
         if not _active_market(row):
             continue
         if market_family(str(row.get("market_name") or "")) != desired_family:
             continue
+        line_priority = 0
+        matched_line_delta = 99.0
         if desired_line is not None:
             row_line = market_line(str(row.get("market_name") or ""))
             market_type = normalize_text(row.get("market_type", ""))
@@ -320,14 +322,23 @@ def find_bfbm_market(
                 and row_line is None
                 and ("corner" in market_type or "corners total" in market_name or "escanteio" in market_name)
             )
-            if not generic_line_market and (row_line is None or abs(row_line - desired_line) > 0.01):
+            if row_line is not None:
+                matched_line_delta = abs(row_line - desired_line)
+                if matched_line_delta <= 0.01:
+                    line_priority = 2
+                else:
+                    continue
+            elif generic_line_market:
+                line_priority = 1
+            else:
                 continue
         score = _event_score(event_name, str(row.get("event_name") or ""))
         if score < 55:
             continue
-        if best is None or score > best[0]:
-            best = (score, row)
-    return best[1] if best else None
+        candidate = (score, line_priority, -matched_line_delta, row)
+        if best is None or candidate[:3] > best[:3]:
+            best = candidate
+    return best[3] if best else None
 
 
 def find_bfbm_event_family_market(
