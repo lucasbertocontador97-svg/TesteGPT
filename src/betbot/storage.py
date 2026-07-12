@@ -523,7 +523,8 @@ class Storage:
             f"""
             select coalesce(sum(
                 case
-                    when status = 'WON' then odd - 1
+                    when status = 'WON' and odd > 1 then odd - 1
+                    when status = 'WON' then 1
                     when status = 'LOST' then -1
                     else 0
                 end
