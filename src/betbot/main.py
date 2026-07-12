@@ -16,7 +16,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
 from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, full_rows_with_audit, rows_to_full_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
-from .bfbm_markets import _event_score, find_bfbm_market, market_family, market_line, payload_to_markets
+from .bfbm_markets import _event_score, event_score_for_row, find_bfbm_market, market_family, market_line, payload_to_markets
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import database_storage_status, load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -199,12 +199,13 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
 
     matched: list[dict] = []
     unmatched: list[dict] = []
+    learned_aliases: list[dict] = []
     for match in accepted:
         event_label = _tc_event_label(match)
         scored_rows: list[tuple[int, dict]] = []
         seen_markets: set[str] = set()
         for row in active_catalog:
-            score = _event_score(event_label, str(row.get("event_name") or ""))
+            score = event_score_for_row(event_label, row)
             if score < 75:
                 continue
             market_name = str(row.get("market_name") or "")
@@ -226,6 +227,17 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
             }
             for score, row in scored_rows[:12]
         ]
+        if scored_rows:
+            best_score, best_row = scored_rows[0]
+            raw_score = _event_score(event_label, str(best_row.get("event_name") or ""))
+            if raw_score >= 75:
+                learned_aliases.append(
+                    {
+                        "source_event_name": event_label,
+                        "target_event_name": str(best_row.get("event_name") or ""),
+                        "score": raw_score,
+                    }
+                )
         item = {
             "totalcorner_event": event_label,
             "league": str(match.get("l") or ""),
@@ -262,6 +274,13 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
         else:
             unmatched.append(item)
 
+    if learned_aliases:
+        storage = Storage(settings.database_path)
+        try:
+            storage.record_bfbm_event_aliases(learned_aliases)
+        finally:
+            storage.close()
+
     return {
         "totalcorner_live": len(live),
         "totalcorner_accepted": len(accepted),
@@ -270,6 +289,7 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
         "bfbm_active_markets": len(active_catalog),
         "matched_games": len(matched),
         "unmatched_games": len(unmatched),
+        "learned_aliases": len(learned_aliases),
         "matched": matched[:30],
         "unmatched": unmatched[:30],
     }
@@ -283,10 +303,27 @@ async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, stora
         return []
     live = await load_totalcorner_live(settings, http)
     snapshots: list[GameSnapshot] = []
+    learned_aliases: list[dict] = []
     for index, match in enumerate(live):
         event_label = _tc_event_label(match)
-        if not any(_event_score(event_label, str(row.get("event_name") or "")) >= 75 for row in catalog_rows):
+        best_score = 0
+        best_event_name = ""
+        for row in catalog_rows:
+            score = event_score_for_row(event_label, row)
+            if score > best_score:
+                best_score = score
+                best_event_name = str(row.get("event_name") or "")
+        if best_score < 75:
             continue
+        raw_score = _event_score(event_label, best_event_name)
+        if raw_score >= 75:
+            learned_aliases.append(
+                {
+                    "source_event_name": event_label,
+                    "target_event_name": best_event_name,
+                    "score": raw_score,
+                }
+            )
         stats = compact_totalcorner_statistics(match)
         if not has_actionable_stats(stats):
             continue
@@ -306,6 +343,8 @@ async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, stora
                 totalcorner_match=match,
             )
         )
+    if learned_aliases:
+        storage.record_bfbm_event_aliases(learned_aliases)
     return snapshots
 
 
@@ -412,6 +451,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/create-live-4",
             "/bfbm/create-live-00-goals",
             "/bfbm/markets.json",
+            "/bfbm/aliases.json",
             "/bfbm/live-overlap.json",
             "/bfbm/strategy-report.json",
             "/bfbm/export-audit.json",
@@ -438,6 +478,25 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             finally:
                 storage.close()
             body = json.dumps({"markets": rows}, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if parsed.path == "/bfbm/aliases.json":
+            query = parse_qs(parsed.query)
+            try:
+                limit = int(query.get("limit", ["200"])[0])
+            except ValueError:
+                limit = 200
+            storage = Storage(settings.database_path)
+            try:
+                rows = storage.bfbm_event_aliases(max(1, min(1000, limit)))
+            finally:
+                storage.close()
+            body = json.dumps({"aliases": rows}, ensure_ascii=False, indent=2).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")

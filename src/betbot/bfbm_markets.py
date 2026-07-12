@@ -290,6 +290,14 @@ def _event_score(left: str, right: str) -> int:
     return int(overlap * 100 / max(1, min(len(left_tokens), len(right_tokens))))
 
 
+def event_score_for_row(event_name: str, row: dict[str, Any]) -> int:
+    score = _event_score(event_name, str(row.get("event_name") or ""))
+    alias = str(row.get("alias_event_name") or "").strip()
+    if alias:
+        score = max(score, _event_score(event_name, alias))
+    return score
+
+
 def _active_market(row: dict[str, Any]) -> bool:
     status = normalize_text(row.get("status", ""))
     return "closed" not in status and "fechado" not in status
@@ -332,7 +340,7 @@ def find_bfbm_market(
                 line_priority = 1
             else:
                 continue
-        score = _event_score(event_name, str(row.get("event_name") or ""))
+        score = event_score_for_row(event_name, row)
         if score < 55:
             continue
         candidate = (score, line_priority, -matched_line_delta, row)
@@ -353,7 +361,7 @@ def find_bfbm_event_family_market(
             continue
         if market_family(str(row.get("market_name") or "")) != desired_family:
             continue
-        score = _event_score(event_name, str(row.get("event_name") or ""))
+        score = event_score_for_row(event_name, row)
         if score < min_score:
             continue
         if best is None or score > best[0]:

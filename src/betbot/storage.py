@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from .bfbm_markets import normalize_event
 from .models import Decision, GameSnapshot
 
 
@@ -108,6 +109,18 @@ class Storage:
                 strategy text,
                 raw_line text
             );
+            create table if not exists bfbm_event_aliases (
+                id integer primary key autoincrement,
+                created_at datetime default current_timestamp,
+                updated_at datetime default current_timestamp,
+                source_event_name text not null,
+                source_event_norm text not null,
+                target_event_name text not null,
+                target_event_norm text not null,
+                score integer not null,
+                seen_count integer not null default 1,
+                unique(source_event_norm, target_event_norm)
+            );
             """
         )
         columns = {row["name"] for row in self.conn.execute("pragma table_info(alerts)").fetchall()}
@@ -129,6 +142,54 @@ class Storage:
             if column not in market_columns:
                 self.conn.execute(f"alter table bfbm_markets add column {column} {ddl_type}")
         self.conn.commit()
+
+    def record_bfbm_event_aliases(self, aliases: list[dict[str, Any]]) -> None:
+        rows = []
+        for alias in aliases:
+            source = str(alias.get("source_event_name") or "").strip()
+            target = str(alias.get("target_event_name") or "").strip()
+            if not source or not target:
+                continue
+            source_norm = normalize_event(source)
+            target_norm = normalize_event(target)
+            if not source_norm or not target_norm or source_norm == target_norm:
+                continue
+            try:
+                score = int(alias.get("score") or 0)
+            except (TypeError, ValueError):
+                score = 0
+            if score < 75:
+                continue
+            rows.append((source, source_norm, target, target_norm, score))
+        if not rows:
+            return
+        self.conn.executemany(
+            """
+            insert into bfbm_event_aliases (
+                source_event_name, source_event_norm, target_event_name, target_event_norm, score
+            ) values (?, ?, ?, ?, ?)
+            on conflict(source_event_norm, target_event_norm) do update set
+                updated_at = current_timestamp,
+                source_event_name = excluded.source_event_name,
+                target_event_name = excluded.target_event_name,
+                score = max(score, excluded.score),
+                seen_count = seen_count + 1
+            """,
+            rows,
+        )
+        self.conn.commit()
+
+    def bfbm_event_aliases(self, limit: int = 1000) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            select *
+            from bfbm_event_aliases
+            order by updated_at desc
+            limit ?
+            """,
+            (max(1, limit),),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def record_bfbm_export_audit(self, rows: list[dict[str, Any]]) -> None:
         if not rows:
@@ -250,7 +311,30 @@ class Storage:
             """,
             (f"-{max(1, max_age_minutes)} minutes", max(1, max_source_age_seconds)),
         ).fetchall()
-        return [dict(row) for row in rows]
+        market_rows = [dict(row) for row in rows]
+        if not market_rows:
+            return []
+        aliases = self.bfbm_event_aliases()
+        if not aliases:
+            return market_rows
+        aliases_by_target: dict[str, list[dict[str, Any]]] = {}
+        for alias in aliases:
+            aliases_by_target.setdefault(str(alias.get("target_event_norm") or ""), []).append(alias)
+        enriched = list(market_rows)
+        seen_alias_rows: set[tuple[str, str, str]] = set()
+        for row in market_rows:
+            target_norm = normalize_event(str(row.get("event_name") or ""))
+            for alias in aliases_by_target.get(target_norm, []):
+                alias_name = str(alias.get("source_event_name") or "").strip()
+                key = (str(row.get("market_id") or ""), target_norm, normalize_event(alias_name))
+                if not alias_name or key in seen_alias_rows:
+                    continue
+                seen_alias_rows.add(key)
+                alias_row = dict(row)
+                alias_row["alias_event_name"] = alias_name
+                alias_row["alias_score"] = alias.get("score")
+                enriched.append(alias_row)
+        return enriched
 
     def seen_alert(self, alert_key: str) -> bool:
         row = self.conn.execute("select 1 from alerts where alert_key = ?", (alert_key,)).fetchone()
