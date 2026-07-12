@@ -99,6 +99,41 @@ def _format_bfbm_snapshot(snapshot_text: str) -> str | None:
     return "\n".join(lines)
 
 
+def _format_result_notification(alert: dict) -> str:
+    status = str(alert.get("status") or "").upper()
+    if status == "WON":
+        title = "\u2705 GREEN - RESULTADO CONFIRMADO"
+    elif status == "LOST":
+        title = "\U0001f534 RED - RESULTADO CONFIRMADO"
+    else:
+        title = "\U0001f7e1 VOID/PUSH - RESULTADO CONFIRMADO"
+    line = alert.get("line")
+    if line in (None, ""):
+        line_text = ""
+    else:
+        try:
+            line_text = f" {float(line):g}"
+        except (TypeError, ValueError):
+            line_text = f" {line}"
+    odd = alert.get("odd")
+    try:
+        odd_text = f"{float(odd):.2f}" if float(odd or 0) > 0 else "BFBM"
+    except (TypeError, ValueError):
+        odd_text = "BFBM"
+    bet_id = str(alert.get("bfbm_bet_id") or "").strip()
+    note = str(alert.get("result_note") or "-").strip()
+    return (
+        f"{title}\n\n"
+        f"Jogo: {alert.get('home', '?')} x {alert.get('away', '?')}\n"
+        f"Mercado: {alert.get('market', '?')}{line_text}\n"
+        f"Selecao: {alert.get('selection', '?')}\n"
+        f"Odd registrada: {odd_text}\n"
+        f"Resultado: {status}\n"
+        f"Bet ID: {bet_id or '-'}\n\n"
+        f"Fechamento: {note}"
+    )
+
+
 def verified_alert_key(game: GameSnapshot, market_family: str, selection: str, line: float | None) -> str:
     return f"verified|{game.fixture_id}|{market_family}|{selection}|{line}"
 
@@ -688,7 +723,8 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             try:
                 storage = Storage(settings.database_path)
                 try:
-                    tips_text = _format_bfbm_confirmed_tip_candidates(storage, settings)
+                    active_tips = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes, limit=5)
+                    tips_text = _format_bfbm_confirmed_tip_candidates(storage, settings, limit=5)
                     storage.record_bfbm_bet_notification(
                         {
                             "bet_id": bet_id,
@@ -701,11 +737,25 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                             "line": raw_line,
                         }
                     )
+                    linked_tip = None
+                    link_note = ""
+                    if matched:
+                        if len(active_tips) == 1:
+                            linked_tip = active_tips[0]
+                            storage.mark_bfbm_bet(int(linked_tip["id"]), bet_id, placed_at_iso or placed_at)
+                            link_note = f"\n\nTip vinculada: alert_id={linked_tip['id']}"
+                        elif not active_tips:
+                            link_note = "\n\nAviso: nao encontrei tip ativa para vincular resultado automaticamente."
+                        else:
+                            link_note = (
+                                "\n\nAviso: havia mais de uma tip ativa; nao vinculei resultado automaticamente "
+                                "para evitar marcar a entrada errada."
+                            )
                 finally:
                     storage.close()
                 if matched and not silent:
                     snapshot_text = _format_bfbm_snapshot(tips_snapshot)
-                    text += f"\n\n{snapshot_text or tips_text}"
+                    text += f"\n\n{snapshot_text or tips_text}{link_note}"
                     require_telegram_settings(settings)
                     asyncio.run(send_message(settings.telegram_bot_token, settings.telegram_chat_id, text))
                 body = b"sent\n"
@@ -1308,6 +1358,17 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
             result = await settle_alert(alert, api_football, totalcorner_today)
             if result:
                 storage.settle_alert(int(alert["id"]), result[0], result[1])
+        if not settings.dry_run:
+            result_notifications = storage.pending_result_notifications()
+            if result_notifications:
+                require_telegram_settings(settings)
+                for alert in result_notifications:
+                    await send_message(
+                        settings.telegram_bot_token,
+                        settings.telegram_chat_id,
+                        _format_result_notification(alert),
+                    )
+                    storage.mark_result_notified(int(alert["id"]))
         return sent
     finally:
         await http.close()

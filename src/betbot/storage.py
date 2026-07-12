@@ -49,7 +49,10 @@ class Storage:
                 betfair_selection_id text,
                 betfair_event_id text,
                 betfair_start_time text,
-                strategy text
+                strategy text,
+                bfbm_bet_id text,
+                bfbm_bet_placed_at text,
+                result_notified_at datetime
             );
             create index if not exists idx_alerts_status on alerts(status);
             create table if not exists bfbm_markets (
@@ -129,9 +132,30 @@ class Storage:
         columns = {row["name"] for row in self.conn.execute("pragma table_info(alerts)").fetchall()}
         if "user_action" not in columns:
             self.conn.execute("alter table alerts add column user_action text not null default 'PENDING'")
-        for column in ("betfair_market_id", "betfair_selection_id", "betfair_event_id", "betfair_start_time", "strategy"):
+        added_result_notified_at = False
+        for column in (
+            "betfair_market_id",
+            "betfair_selection_id",
+            "betfair_event_id",
+            "betfair_start_time",
+            "strategy",
+            "bfbm_bet_id",
+            "bfbm_bet_placed_at",
+            "result_notified_at",
+        ):
             if column not in columns:
                 self.conn.execute(f"alter table alerts add column {column} text")
+                if column == "result_notified_at":
+                    added_result_notified_at = True
+        if added_result_notified_at:
+            self.conn.execute(
+                """
+                update alerts
+                set result_notified_at = current_timestamp
+                where status in ('WON', 'LOST', 'PUSH')
+                  and result_notified_at is null
+                """
+            )
         self.conn.execute("create index if not exists idx_alerts_user_action on alerts(user_action)")
         market_columns = {row["name"] for row in self.conn.execute("pragma table_info(bfbm_markets)").fetchall()}
         for column, ddl_type in (
@@ -522,12 +546,49 @@ class Storage:
         self.conn.commit()
         return cursor.rowcount > 0
 
+    def mark_bfbm_bet(self, alert_id: int, bet_id: str, placed_at: str = "") -> bool:
+        cursor = self.conn.execute(
+            """
+            update alerts
+            set user_action = 'BET',
+                bfbm_bet_id = coalesce(nullif(?, ''), bfbm_bet_id),
+                bfbm_bet_placed_at = coalesce(nullif(?, ''), bfbm_bet_placed_at)
+            where id = ?
+            """,
+            (str(bet_id or ""), str(placed_at or ""), alert_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
     def settle_alert(self, alert_id: int, status: str, note: str) -> None:
         self.conn.execute(
             "update alerts set status = ?, result_note = ?, settled_at = current_timestamp where id = ?",
             (status, note, alert_id),
         )
         self.conn.commit()
+
+    def pending_result_notifications(self, limit: int = 20) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            select *
+            from alerts
+            where user_action = 'BET'
+              and status in ('WON', 'LOST', 'PUSH')
+              and result_notified_at is null
+            order by settled_at asc, id asc
+            limit ?
+            """,
+            (max(1, limit),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_result_notified(self, alert_id: int) -> bool:
+        cursor = self.conn.execute(
+            "update alerts set result_notified_at = current_timestamp where id = ?",
+            (alert_id,),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
 
     def _performance_where(self, where_clause: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
         rows = self.conn.execute(

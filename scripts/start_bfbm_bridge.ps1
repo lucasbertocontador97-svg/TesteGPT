@@ -19,5 +19,5 @@ $Bridge = Join-Path $RepoRoot "scripts\bfbm_bridge.py"
     --notify-sid-filter "CODEX-TESTEGPT" `
     --min-price 1.80 `
     --max-price 100.00 `
-    --max-tips 12 `
+    --max-tips 1 `
     --tip-keep-seconds 600
