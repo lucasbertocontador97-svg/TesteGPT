@@ -71,7 +71,7 @@ Get-Content -LiteralPath $LogPath -Encoding UTF8 | ForEach-Object {
         $sent += 1
     }
     catch {
-        Write-Warning "Falhou betId=$betId: $($_.Exception.Message)"
+        Write-Warning "Falhou betId=${betId}: $($_.Exception.Message)"
     }
 }
 
