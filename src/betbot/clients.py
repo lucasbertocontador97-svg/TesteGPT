@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -256,6 +257,8 @@ class TotalCornerClient:
     # requested. dangerousAttacks was verified to keep the full in-play list and
     # gives the motor a useful pressure signal beyond score/corners.
     live_columns = "dangerousAttacks"
+    _inplay_cache: list[dict[str, Any]] = []
+    _inplay_cache_ts: float = 0.0
 
     def __init__(self, token: str, http: HttpJsonClient) -> None:
         self.token = token
@@ -282,15 +285,28 @@ class TotalCornerClient:
             )
             enriched_items = self._data_items(enriched_data)
             if enriched_items:
+                self.__class__._inplay_cache = enriched_items
+                self.__class__._inplay_cache_ts = time.time()
                 return enriched_items[:limit]
         except Exception as exc:
             logger.warning("TotalCorner enriched in-play failed; falling back to basic feed: %s", exc)
             await asyncio.sleep(3)
-        basic_data = await self.http.get_json(
-            f"{self.base_url}/match/today",
-            params={"token": self.token, "type": "inplay"},
-        )
-        return self._data_items(basic_data)[:limit]
+        try:
+            basic_data = await self.http.get_json(
+                f"{self.base_url}/match/today",
+                params={"token": self.token, "type": "inplay"},
+            )
+            basic_items = self._data_items(basic_data)
+            if basic_items:
+                self.__class__._inplay_cache = basic_items
+                self.__class__._inplay_cache_ts = time.time()
+            return basic_items[:limit]
+        except Exception as exc:
+            cache_age = time.time() - self.__class__._inplay_cache_ts
+            if self.__class__._inplay_cache and cache_age <= 120:
+                logger.warning("TotalCorner basic in-play failed; using %.0fs cache: %s", cache_age, exc)
+                return self.__class__._inplay_cache[:limit]
+            raise
 
     async def today_all(self, limit: int = 200) -> list[dict[str, Any]]:
         data = await self.http.get_json(

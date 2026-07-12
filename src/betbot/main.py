@@ -262,8 +262,13 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
         storage.close()
 
     http = HttpJsonClient()
+    totalcorner_error = ""
     try:
         live = await TotalCornerClient(settings.totalcorner_token, http).today_inplay(settings.max_live_events) if settings.totalcorner_token else []
+    except Exception as exc:
+        logger.warning("TotalCorner overlap falhou: %s", exc)
+        live = []
+        totalcorner_error = str(exc)[:300] or type(exc).__name__
     finally:
         await http.close()
 
@@ -368,6 +373,7 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
 
     return {
         "totalcorner_live": len(live),
+        "totalcorner_error": totalcorner_error,
         "totalcorner_accepted": len(accepted),
         "totalcorner_blocked": len(blocked),
         "bfbm_markets": len(catalog_rows),
