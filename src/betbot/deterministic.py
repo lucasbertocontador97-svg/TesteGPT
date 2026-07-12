@@ -80,10 +80,18 @@ def _available_lines(
 
 def _goal_over_threshold(minute: int, needed_goals: int) -> float:
     if needed_goals <= 1:
-        return 0.50 if minute >= 70 else 0.56
+        return 0.62 if minute >= 70 else 0.68
     if needed_goals == 2:
-        return 0.40 if minute >= 62 else 0.46
-    return 0.34
+        return 0.56 if minute >= 62 else 0.62
+    return 0.50
+
+
+def _goal_pressure_ok(needed_goals: int, total_shots: float, shots_on: float, pressure: float) -> bool:
+    if needed_goals <= 1:
+        return total_shots >= 12 and shots_on >= 4 and pressure >= 55
+    if needed_goals == 2:
+        return total_shots >= 16 and shots_on >= 6 and pressure >= 65
+    return total_shots >= 20 and shots_on >= 8 and pressure >= 70
 
 
 def _goal_over_strategy(line: float) -> str:
@@ -234,9 +242,9 @@ def _nil_nil_goal_window(minute: int, current_goals: int) -> tuple[str, int, flo
     if current_goals != 0:
         return None
     if 18 <= minute <= 25:
-        return "GOAL_OVER_05_HT", 45, 0.40
+        return "GOAL_OVER_05_HT", 45, 0.48
     if 58 <= minute <= 82:
-        return "GOAL_OVER_05_FT", 90, 0.45
+        return "GOAL_OVER_05_FT", 90, 0.56
     return None
 
 
@@ -408,7 +416,10 @@ def evaluate_game(
             corners=corners,
             pressure=pressure,
         )
-        if prob >= threshold and conviction >= min_confidence:
+        nil_nil_confidence = max(min_confidence, 84)
+        if total_shots < 9 or shots_on < 3 or pressure < 50:
+            conviction = 0
+        if prob >= threshold and conviction >= nil_nil_confidence:
             candidates.append(
                 DeterministicSignal(
                     True,
@@ -447,7 +458,10 @@ def evaluate_game(
         prob = _poisson_at_least(goal_mean, needed_goals)
         score = round(prob * 100)
         threshold = _goal_over_threshold(minute, needed_goals)
-        if prob >= threshold and score >= min_confidence:
+        goal_confidence = max(min_confidence, 82 if needed_goals <= 1 else 86)
+        if not _goal_pressure_ok(needed_goals, total_shots, shots_on, pressure):
+            continue
+        if prob >= threshold and score >= goal_confidence:
             candidates.append(
                 DeterministicSignal(
                     True,
@@ -493,7 +507,9 @@ def evaluate_game(
             prob_other_scores = _poisson_at_least(goal_mean, 1)
             score = round(prob_other_scores * 100)
             conviction = _btts_yes_conviction(score, minute, current_goals, total_shots, shots_on, pressure)
-            if prob_other_scores >= 0.50 and conviction >= max(min_confidence, 76):
+            if total_shots < 16 or shots_on < 6 or pressure < 65:
+                conviction = 0
+            if prob_other_scores >= 0.65 and conviction >= max(min_confidence, 88):
                 candidates.append(
                     DeterministicSignal(
                         True,
@@ -511,7 +527,7 @@ def evaluate_game(
             prob_no_more_goal = _poisson_at_most(goal_mean, 0)
             score = round(prob_no_more_goal * 100)
             conviction = _btts_no_conviction(score, minute, total_shots, shots_on, pressure)
-            if prob_no_more_goal >= 0.62 and conviction >= max(min_confidence, 78):
+            if prob_no_more_goal >= 0.78 and conviction >= max(min_confidence, 88):
                 candidates.append(
                     DeterministicSignal(
                         True,
@@ -531,8 +547,10 @@ def evaluate_game(
         prob = _poisson_at_least(goal_mean, 1)
         score = round(prob * 100)
         conviction = _next_goal_conviction(score, total_shots, shots_on, corners, pressure)
-        threshold = 0.56 if minute < 70 else 0.50
-        if prob >= threshold and conviction >= min_confidence:
+        threshold = 0.66 if minute < 70 else 0.62
+        if not _goal_pressure_ok(1, total_shots, shots_on, pressure):
+            conviction = 0
+        if prob >= threshold and conviction >= max(min_confidence, 86):
             candidates.append(
                 DeterministicSignal(
                     True,
