@@ -465,7 +465,7 @@ def source_loop(state: BridgeState, source_url: str, poll_seconds: int) -> None:
 
 
 BET_RE = re.compile(
-    r"HandleOnPlaceBets:\s*Placed bet,\s*betId:\s*(?P<bet_id>[^,]+),\s*sizeMatched:\s*(?P<size>[^,]+),\s*success:\s*(?P<success>[^,]+),\s*strategy:\s*(?P<strategy>[^,]+)",
+    r"(?P<placed_at>\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}):\s*HandleOnPlaceBets:\s*Placed bet,\s*betId:\s*(?P<bet_id>[^,]+),\s*sizeMatched:\s*(?P<size>[^,]+),\s*success:\s*(?P<success>[^,]+),\s*strategy:\s*(?P<strategy>[^,]+),\s*sid:\s*(?P<sid>.+)$",
     re.IGNORECASE,
 )
 
@@ -485,10 +485,12 @@ def monitor_bfbm_log(state: BridgeState, log_path: Path, notify_url: str | None,
             if not match:
                 continue
             item = {
+                "placed_at": match.group("placed_at").strip(),
                 "bet_id": match.group("bet_id").strip(),
                 "size_matched": match.group("size").strip(),
                 "success": match.group("success").strip(),
                 "strategy": match.group("strategy").strip(),
+                "sid": match.group("sid").strip(),
                 "line": line.strip(),
             }
             if not state.register_bet_notification(item):

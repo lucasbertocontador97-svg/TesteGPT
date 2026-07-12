@@ -103,10 +103,13 @@ class Storage:
             create table if not exists bfbm_bet_notifications (
                 id integer primary key autoincrement,
                 created_at datetime default current_timestamp,
+                placed_at text,
+                placed_at_iso text,
                 bet_id text not null unique,
                 size_matched text,
                 success text,
                 strategy text,
+                sid text,
                 raw_line text
             );
             create table if not exists bfbm_event_aliases (
@@ -141,6 +144,10 @@ class Storage:
         ):
             if column not in market_columns:
                 self.conn.execute(f"alter table bfbm_markets add column {column} {ddl_type}")
+        bet_columns = {row["name"] for row in self.conn.execute("pragma table_info(bfbm_bet_notifications)").fetchall()}
+        for column, ddl_type in (("placed_at", "text"), ("placed_at_iso", "text"), ("sid", "text")):
+            if column not in bet_columns:
+                self.conn.execute(f"alter table bfbm_bet_notifications add column {column} {ddl_type}")
         self.conn.commit()
 
     def record_bfbm_event_aliases(self, aliases: list[dict[str, Any]]) -> None:
@@ -249,15 +256,26 @@ class Storage:
             return
         self.conn.execute(
             """
-            insert or ignore into bfbm_bet_notifications (
-                bet_id, size_matched, success, strategy, raw_line
-            ) values (?, ?, ?, ?, ?)
+            insert into bfbm_bet_notifications (
+                placed_at, placed_at_iso, bet_id, size_matched, success, strategy, sid, raw_line
+            ) values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(bet_id) do update set
+                placed_at = coalesce(nullif(excluded.placed_at, ''), placed_at),
+                placed_at_iso = coalesce(nullif(excluded.placed_at_iso, ''), placed_at_iso),
+                size_matched = coalesce(nullif(excluded.size_matched, ''), size_matched),
+                success = coalesce(nullif(excluded.success, ''), success),
+                strategy = coalesce(nullif(excluded.strategy, ''), strategy),
+                sid = coalesce(nullif(excluded.sid, ''), sid),
+                raw_line = coalesce(nullif(excluded.raw_line, ''), raw_line)
             """,
             (
+                str(item.get("placed_at") or ""),
+                str(item.get("placed_at_iso") or ""),
                 bet_id,
                 str(item.get("size_matched") or ""),
                 str(item.get("success") or ""),
                 str(item.get("strategy") or ""),
+                str(item.get("sid") or ""),
                 str(item.get("line") or ""),
             ),
         )
@@ -661,19 +679,54 @@ class Storage:
                 """
                 select *
                 from bfbm_bet_notifications
-                where created_at >= datetime('now', ?)
+                where coalesce(nullif(placed_at_iso, ''), created_at) >= datetime('now', ?)
                 order by id desc
                 limit ?
                 """,
                 (f"-{hours} hours", limit),
             ).fetchall()
         ]
+        real_bets = [
+            dict(row)
+            for row in self.conn.execute(
+                """
+                select *
+                from bfbm_bet_notifications
+                where coalesce(nullif(placed_at_iso, ''), created_at) >= datetime('now', ?)
+                  and (
+                    sid like 'CODEX-TESTEGPT%'
+                    or strategy like '%TesteGPT%'
+                  )
+                order by coalesce(nullif(placed_at_iso, ''), created_at) desc, id desc
+                limit ?
+                """,
+                (f"-{hours} hours", limit),
+            ).fetchall()
+        ]
+        real_summary_rows = self.conn.execute(
+            """
+            select
+                count(*) as total,
+                sum(case when replace(size_matched, ',', '.') + 0 > 0 then 1 else 0 end) as matched,
+                round(sum(case when replace(size_matched, ',', '.') + 0 > 0 then replace(size_matched, ',', '.') + 0 else 0 end), 2) as matched_amount
+            from bfbm_bet_notifications
+            where coalesce(nullif(placed_at_iso, ''), created_at) >= datetime('now', ?)
+              and (
+                sid like 'CODEX-TESTEGPT%'
+                or strategy like '%TesteGPT%'
+              )
+            """
+            ,
+            (f"-{hours} hours",),
+        ).fetchone()
         return {
             "window_hours": hours,
             "summary": summary,
             "recent_exports": recent,
             "sent_without_export_audit": sent_without_audit,
             "bet_notifications": bets,
+            "real_bet_summary": dict(real_summary_rows) if real_summary_rows else {},
+            "real_bet_notifications": real_bets,
         }
 
     def export_json(self) -> str:

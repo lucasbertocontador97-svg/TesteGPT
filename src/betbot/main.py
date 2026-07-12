@@ -607,7 +607,16 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             size_matched = query.get("size_matched", [""])[0].strip()
             success = query.get("success", [""])[0].strip()
             strategy = query.get("strategy", [""])[0].strip()
+            placed_at = query.get("placed_at", [""])[0].strip()
+            sid = query.get("sid", [""])[0].strip()
+            silent = query.get("silent", [""])[0].strip().lower() in {"1", "true", "yes", "sim"}
             raw_line = query.get("line", [""])[0].strip()
+            placed_at_iso = ""
+            if placed_at:
+                try:
+                    placed_at_iso = datetime.strptime(placed_at, "%d/%m/%Y %H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    placed_at_iso = ""
             matched = False
             try:
                 matched = float(size_matched.replace(",", ".") or "0") > 0
@@ -619,7 +628,9 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 f"Bet ID: {bet_id or '-'}\n"
                 f"Matched: {size_matched or '0'}\n"
                 f"Status: {success or '-'}\n"
-                f"Estrategia: {strategy or '-'}"
+                f"Estrategia: {strategy or '-'}\n"
+                f"SID: {sid or '-'}\n"
+                f"Horario BFBM: {placed_at or '-'}"
             )
             if raw_line:
                 text += f"\n\nLog: {raw_line[:500]}"
@@ -629,16 +640,20 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                     storage.record_bfbm_bet_notification(
                         {
                             "bet_id": bet_id,
+                            "placed_at": placed_at,
+                            "placed_at_iso": placed_at_iso,
                             "size_matched": size_matched,
                             "success": success,
                             "strategy": strategy,
+                            "sid": sid,
                             "line": raw_line,
                         }
                     )
                 finally:
                     storage.close()
-                require_telegram_settings(settings)
-                asyncio.run(send_message(settings.telegram_bot_token, settings.telegram_chat_id, text))
+                if not silent:
+                    require_telegram_settings(settings)
+                    asyncio.run(send_message(settings.telegram_bot_token, settings.telegram_chat_id, text))
                 body = b"sent\n"
                 self.send_response(200)
             except Exception as exc:

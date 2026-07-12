@@ -21,11 +21,15 @@ function Send-BfbmNotification([string]$Line) {
     $sizeMatched = ""
     $success = ""
     $strategy = ""
+    $placedAt = ""
+    $sid = ""
 
+    if ($Line -match "^(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}):") { $placedAt = $Matches[1].Trim() }
     if ($Line -match "betId:\s*([^,]+)") { $betId = $Matches[1].Trim() }
     if ($Line -match "sizeMatched:\s*([^,]+)") { $sizeMatched = $Matches[1].Trim() }
     if ($Line -match "success:\s*([^,]+)") { $success = $Matches[1].Trim() }
     if ($Line -match "strategy:\s*([^,]+)") { $strategy = $Matches[1].Trim() }
+    if ($Line -match "sid:\s*(.+)$") { $sid = $Matches[1].Trim() }
 
     $dedupeKey = if ($betId) { $betId } else { $Line }
     if ($seen.ContainsKey($dedupeKey)) {
@@ -36,9 +40,11 @@ function Send-BfbmNotification([string]$Line) {
     $separator = if ($NotifyUrl.Contains("?")) { "&" } else { "?" }
     $url = $NotifyUrl + $separator +
         "bet_id=$(ConvertTo-QueryValue $betId)" +
+        "&placed_at=$(ConvertTo-QueryValue $placedAt)" +
         "&size_matched=$(ConvertTo-QueryValue $sizeMatched)" +
         "&success=$(ConvertTo-QueryValue $success)" +
         "&strategy=$(ConvertTo-QueryValue $strategy)" +
+        "&sid=$(ConvertTo-QueryValue $sid)" +
         "&line=$(ConvertTo-QueryValue $Line)"
 
     Invoke-WebRequest -UseBasicParsing -Uri $url | Out-Null
