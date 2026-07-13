@@ -49,6 +49,56 @@ def market_label(market_family: str, selection: str) -> str:
     return MARKET_LABELS.get((market_family, selection), f"{market_family} {selection}")
 
 
+def _record_bfbm_candidate_audit(
+    storage: Storage,
+    game: GameSnapshot,
+    signal,
+    *,
+    status: str,
+    reason: str,
+    bfbm_market: dict | None = None,
+) -> None:
+    family = getattr(signal, "market_family", "none")
+    selection = getattr(signal, "selection", "none")
+    line = getattr(signal, "line", None)
+    strategy = getattr(signal, "strategy", "unknown")
+    alert_key = f"candidate|{game.event_id}|{family}|{selection}|{line}|{strategy}"
+    storage.record_bfbm_export_audit(
+        [
+            {
+                "alert_id": None,
+                "alert_key": alert_key,
+                "endpoint": "process_once",
+                "status": status,
+                "reason": reason,
+                "home": game.home,
+                "away": game.away,
+                "event_name": f"{game.home} x {game.away}",
+                "market": market_label(family, selection),
+                "selection": selection,
+                "line": line,
+                "bfbm_event_name": (bfbm_market or {}).get("event_name", ""),
+                "bfbm_market_name": (bfbm_market or {}).get("market_name", ""),
+                "bfbm_selection_name": "",
+                "bfbm_event_id": (bfbm_market or {}).get("event_id", ""),
+                "bfbm_market_id": (bfbm_market or {}).get("market_id", ""),
+                "bfbm_selection_id": "",
+                "bfbm_start_time": (bfbm_market or {}).get("start_time", ""),
+                "raw": {
+                    "event_id": game.event_id,
+                    "minute": game.minute,
+                    "score_home": game.score_home,
+                    "score_away": game.score_away,
+                    "signal_reason": getattr(signal, "reason", ""),
+                    "strategy": strategy,
+                    "probability": getattr(signal, "probability", 0),
+                    "confidence": getattr(signal, "confidence", 0),
+                },
+            }
+        ]
+    )
+
+
 def _format_bfbm_confirmed_tip_candidates(storage: Storage, settings, limit: int = 3) -> str:
     tips = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes, limit=limit)
     if not tips:
@@ -1217,6 +1267,14 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
             )
             if not math_signal.approved:
                 logger.info("Motor matematico bloqueou %s x %s: %s", game.home, game.away, math_signal.reason)
+                if bfbm_source:
+                    _record_bfbm_candidate_audit(
+                        storage,
+                        game,
+                        math_signal,
+                        status="SKIPPED",
+                        reason=f"math_blocked:{math_signal.strategy}",
+                    )
                 continue
             if bfbm_source:
                 bfbm_market = find_bfbm_market(
@@ -1233,7 +1291,22 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                         math_signal.market_family,
                         math_signal.line,
                     )
+                    _record_bfbm_candidate_audit(
+                        storage,
+                        game,
+                        math_signal,
+                        status="BLOCKED",
+                        reason="candidate_no_bfbm_market_match",
+                    )
                     continue
+                _record_bfbm_candidate_audit(
+                    storage,
+                    game,
+                    math_signal,
+                    status="CANDIDATE",
+                    reason="candidate_has_bfbm_market",
+                    bfbm_market=bfbm_market,
+                )
             idea = await suggest_market_without_odds(
                 game,
                 api_key=settings.openai_api_key,

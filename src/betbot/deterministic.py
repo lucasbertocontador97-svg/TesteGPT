@@ -80,18 +80,22 @@ def _available_lines(
 
 def _goal_over_threshold(minute: int, needed_goals: int) -> float:
     if needed_goals <= 1:
-        return 0.62 if minute >= 70 else 0.68
+        if minute < 60:
+            return 0.70
+        return 0.62 if minute >= 70 else 0.66
     if needed_goals == 2:
-        return 0.56 if minute >= 62 else 0.62
+        return 0.56 if minute >= 62 else 0.60
     return 0.50
 
 
 def _goal_pressure_ok(needed_goals: int, total_shots: float, shots_on: float, pressure: float) -> bool:
     if needed_goals <= 1:
-        return total_shots >= 12 and shots_on >= 4 and pressure >= 55
+        return (total_shots >= 10 and shots_on >= 3 and pressure >= 50) or (
+            total_shots >= 14 and shots_on >= 2 and pressure >= 60
+        )
     if needed_goals == 2:
-        return total_shots >= 16 and shots_on >= 6 and pressure >= 65
-    return total_shots >= 20 and shots_on >= 8 and pressure >= 70
+        return total_shots >= 14 and shots_on >= 5 and pressure >= 62
+    return total_shots >= 18 and shots_on >= 7 and pressure >= 68
 
 
 def _goal_over_strategy(line: float) -> str:
@@ -308,7 +312,7 @@ def _btts_yes_conviction(
     pressure: float,
 ) -> int:
     bonus = 0
-    if 50 <= minute <= 78:
+    if 45 <= minute <= 78:
         bonus += 5
     if current_goals >= 1:
         bonus += 6
@@ -443,13 +447,13 @@ def evaluate_game(
             continue
         if line == 0.5 and current_goals == 0 and not nil_nil_goal_window:
             continue
-        if line == 1.5 and minute < 55:
+        if line == 1.5 and minute < 48:
             continue
-        if line == 1.5 and current_goals >= 1 and minute < 68:
+        if line == 1.5 and current_goals >= 1 and minute < 50:
             continue
-        if line >= 2.5 and minute < 55:
+        if line >= 2.5 and minute < (48 if current_goals >= 1 else 55):
             continue
-        if line >= 3.5 and minute < 62:
+        if line >= 3.5 and minute < (58 if current_goals >= 2 else 62):
             continue
         if line >= 3.5 and current_goals < line - 2.0:
             continue
@@ -476,7 +480,7 @@ def evaluate_game(
                 )
             )
 
-    if minute >= 65 and (dead_game or (total_shots <= 10 and shots_on <= 3 and pressure <= 45)):
+    if minute >= 60 and (dead_game or (total_shots <= 10 and shots_on <= 3 and pressure <= 45)):
         for line in goal_lines:
             if line <= current_goals or line > current_goals + 3.5:
                 continue
@@ -484,7 +488,7 @@ def evaluate_game(
             prob = _poisson_at_most(goal_mean, additional_allowed)
             score = round(prob * 100)
             conviction = _under_goal_conviction(score, minute, total_shots, shots_on, pressure)
-            if prob >= 0.74 and conviction >= max(min_confidence, 78):
+            if prob >= 0.70 and conviction >= max(min_confidence, 76):
                 candidates.append(
                     DeterministicSignal(
                         True,
@@ -503,13 +507,13 @@ def evaluate_game(
     if _has_market_family(available_markets, "btts"):
         both_scored = score_home > 0 and score_away > 0
         one_side_blank = (score_home == 0) != (score_away == 0)
-        if one_side_blank and 50 <= minute <= 80:
+        if one_side_blank and 45 <= minute <= 78:
             prob_other_scores = _poisson_at_least(goal_mean, 1)
             score = round(prob_other_scores * 100)
             conviction = _btts_yes_conviction(score, minute, current_goals, total_shots, shots_on, pressure)
-            if total_shots < 16 or shots_on < 6 or pressure < 65:
+            if total_shots < 14 or shots_on < 5 or pressure < 58:
                 conviction = 0
-            if prob_other_scores >= 0.65 and conviction >= max(min_confidence, 88):
+            if prob_other_scores >= 0.58 and conviction >= max(min_confidence, 84):
                 candidates.append(
                     DeterministicSignal(
                         True,
@@ -527,7 +531,7 @@ def evaluate_game(
             prob_no_more_goal = _poisson_at_most(goal_mean, 0)
             score = round(prob_no_more_goal * 100)
             conviction = _btts_no_conviction(score, minute, total_shots, shots_on, pressure)
-            if prob_no_more_goal >= 0.78 and conviction >= max(min_confidence, 88):
+            if prob_no_more_goal >= 0.70 and conviction >= max(min_confidence, 82):
                 candidates.append(
                     DeterministicSignal(
                         True,
@@ -542,15 +546,15 @@ def evaluate_game(
                     )
                 )
 
-    if 58 <= minute <= 86 and current_goals > 0:
+    if 50 <= minute <= 86 and current_goals > 0:
         next_goal_line = current_goals + 0.5
         prob = _poisson_at_least(goal_mean, 1)
         score = round(prob * 100)
         conviction = _next_goal_conviction(score, total_shots, shots_on, corners, pressure)
-        threshold = 0.66 if minute < 70 else 0.62
+        threshold = 0.68 if minute < 60 else 0.66 if minute < 70 else 0.62
         if not _goal_pressure_ok(1, total_shots, shots_on, pressure):
             conviction = 0
-        if prob >= threshold and conviction >= max(min_confidence, 86):
+        if prob >= threshold and conviction >= max(min_confidence, 84):
             candidates.append(
                 DeterministicSignal(
                     True,

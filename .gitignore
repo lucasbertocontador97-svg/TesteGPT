@@ -9,3 +9,6 @@ bot.sqlite3
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+research/goals_backtest/.env
+research/goals_backtest/data/
+research/goals_backtest/output/

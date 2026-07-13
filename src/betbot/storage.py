@@ -225,6 +225,61 @@ class Storage:
     def record_bfbm_export_audit(self, rows: list[dict[str, Any]]) -> None:
         if not rows:
             return
+        keyed_rows = [row for row in rows if row.get("alert_id") is None and row.get("alert_key")]
+        insert_rows = [row for row in rows if not (row.get("alert_id") is None and row.get("alert_key"))]
+        for row in keyed_rows:
+            cursor = self.conn.execute(
+                """
+                update bfbm_export_audit
+                set last_seen_at = current_timestamp,
+                    seen_count = seen_count + 1,
+                    status = ?,
+                    reason = ?,
+                    home = ?,
+                    away = ?,
+                    event_name = ?,
+                    market = ?,
+                    selection = ?,
+                    line = ?,
+                    bfbm_event_name = ?,
+                    bfbm_market_name = ?,
+                    bfbm_selection_name = ?,
+                    bfbm_event_id = ?,
+                    bfbm_market_id = ?,
+                    bfbm_selection_id = ?,
+                    bfbm_start_time = ?,
+                    raw_json = ?
+                where alert_id is null
+                  and alert_key = ?
+                  and endpoint = ?
+                """,
+                (
+                    row.get("status", ""),
+                    row.get("reason", ""),
+                    row.get("home", ""),
+                    row.get("away", ""),
+                    row.get("event_name", ""),
+                    row.get("market", ""),
+                    row.get("selection", ""),
+                    row.get("line"),
+                    row.get("bfbm_event_name", ""),
+                    row.get("bfbm_market_name", ""),
+                    row.get("bfbm_selection_name", ""),
+                    row.get("bfbm_event_id", ""),
+                    row.get("bfbm_market_id", ""),
+                    row.get("bfbm_selection_id", ""),
+                    row.get("bfbm_start_time", ""),
+                    json.dumps(row.get("raw", {}), ensure_ascii=False),
+                    row.get("alert_key", ""),
+                    row.get("endpoint", ""),
+                ),
+            )
+            if cursor.rowcount == 0:
+                insert_rows.append(row)
+        rows = insert_rows
+        if not rows:
+            self.conn.commit()
+            return
         self.conn.executemany(
             """
             insert into bfbm_export_audit (
@@ -704,7 +759,12 @@ class Storage:
                 select a.id as alert_id, a.created_at as alert_created_at,
                        e.first_seen_at, e.last_seen_at, e.seen_count,
                        e.endpoint, e.status as export_status, e.reason,
-                       a.home, a.away, a.minute, a.market, a.selection, a.line,
+                       coalesce(nullif(a.home, ''), e.home) as home,
+                       coalesce(nullif(a.away, ''), e.away) as away,
+                       a.minute,
+                       coalesce(nullif(a.market, ''), e.market) as market,
+                       coalesce(nullif(a.selection, ''), e.selection) as selection,
+                       coalesce(a.line, e.line) as line,
                        e.bfbm_event_name, e.bfbm_market_name, e.bfbm_selection_name,
                        e.bfbm_event_id, e.bfbm_market_id, e.bfbm_selection_id,
                        e.bfbm_start_time, a.status as alert_status, a.user_action
