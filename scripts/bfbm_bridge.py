@@ -172,6 +172,42 @@ def _start_time_value_from(row: dict[str, Any], *names: str) -> str:
     return value if value else "0001-01-01 00:00:00"
 
 
+STANDARD_GOALS_SELECTION_IDS: dict[float, dict[str, str]] = {
+    0.5: {"over": "5851483", "under": "5851482"},
+    1.5: {"over": "1221386", "under": "1221385"},
+    2.5: {"over": "47973", "under": "47972"},
+    3.5: {"over": "1222345", "under": "1222344"},
+    4.5: {"over": "1222347", "under": "1222346"},
+    5.5: {"over": "1485573", "under": "1485572"},
+    6.5: {"over": "1485575", "under": "1485574"},
+    7.5: {"over": "1485577", "under": "1485576"},
+    8.5: {"over": "1485579", "under": "1485578"},
+}
+
+STANDARD_BTTS_SELECTION_IDS = {
+    "yes": "30246",
+    "no": "30247",
+}
+
+
+def _standard_selection_id(selection: str, market_name: str, market_type: str, row: dict[str, Any]) -> str:
+    combined = " ".join([selection, market_name, market_type, str(row.get("line") or row.get("Line") or "")])
+    normalized = combined.casefold()
+    if "ambos" in normalized or "both_teams_to_score" in normalized:
+        return STANDARD_BTTS_SELECTION_IDS["no"] if re.search(r"\b(no|nao|não|nÃ£o)\b", normalized) else STANDARD_BTTS_SELECTION_IDS["yes"]
+    if "gol" not in normalized and "goal" not in normalized and "over_under" not in normalized:
+        return ""
+    line_match = re.search(r"(\d+(?:[,.]\d+)?)", combined)
+    if not line_match:
+        return ""
+    try:
+        line = float(line_match.group(1).replace(",", "."))
+    except ValueError:
+        return ""
+    side = "under" if re.search(r"\b(menos|under)\b", combined, re.IGNORECASE) else "over"
+    return STANDARD_GOALS_SELECTION_IDS.get(line, {}).get(side, "")
+
+
 def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -> dict[str, str] | None:
     event = _normalize_event_name(str(row.get("EventName") or row.get("event") or ""))
     selection = _normalize_name(str(row.get("SelectionName") or row.get("selection") or ""))
@@ -186,11 +222,14 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
         row_max = max_price
     market_name = str(row.get("MarketName") or row.get("market_name") or "Resultado da partida").strip()
     selection, market_name, market_type = _normalize_corner_market(row, selection, market_name, market_type)
+    selection_id = _id_value_from(row, "SelectionId", "selection_id", "ID da selecao")
+    if selection_id == "0":
+        selection_id = _standard_selection_id(selection, market_name, market_type, row) or "0"
     return {
         "Provider": str(row.get("Provider") or row.get("provider") or "TesteGPT").strip(),
         "Handicap": str(row.get("Handicap") or row.get("handicap") or "0").strip(),
         "SelectionName": selection,
-        "SelectionId": _id_value_from(row, "SelectionId", "selection_id", "ID da selecao"),
+        "SelectionId": selection_id,
         "MarketId": _market_id_value_from(row, "MarketId", "market_id", "ID do mercado"),
         "EventId": _id_value_from(row, "EventId", "event_id", "ID do Evento"),
         "MarketName": market_name,
