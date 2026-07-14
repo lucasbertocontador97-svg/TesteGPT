@@ -146,6 +146,20 @@ def _start_time_or_empty_default(value: Any) -> str:
     return text if text else "0001-01-01 00:00:00"
 
 
+def _normalize_bfbm_start_time(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) >= 10 and text[:4].isdigit():
+        return text
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+    return text
+
+
 def _bfbm_clean_name(value: str) -> str:
     aliases = {
         "Nublense": "\u00d1ublense",
@@ -348,6 +362,49 @@ def _runner_selection_id(runner: dict[str, Any]) -> str:
     return str(runner.get("selectionId") or runner.get("selection_id") or runner.get("id") or "")
 
 
+STANDARD_GOALS_SELECTION_IDS: dict[float, dict[str, str]] = {
+    0.5: {"over": "5851483", "under": "5851482"},
+    1.5: {"over": "1221386", "under": "1221385"},
+    2.5: {"over": "47973", "under": "47972"},
+    3.5: {"over": "1222345", "under": "1222344"},
+    4.5: {"over": "1222347", "under": "1222346"},
+    5.5: {"over": "1485573", "under": "1485572"},
+    6.5: {"over": "1485575", "under": "1485574"},
+    7.5: {"over": "1485577", "under": "1485576"},
+    8.5: {"over": "1485579", "under": "1485578"},
+}
+
+STANDARD_BTTS_SELECTION_IDS = {
+    "yes": "30246",
+    "no": "30247",
+}
+
+
+def _selection_side(row: dict[str, str]) -> str:
+    selection_norm = normalize_text(row.get("SelectionName", ""))
+    if any(token in selection_norm for token in ("menos", "under", "no", "nao", "não")):
+        return "under"
+    return "over"
+
+
+def _standard_selection_id(row: dict[str, str], market: dict[str, Any]) -> str:
+    family = row_market_family(market)
+    if family in {"goals", "first_half_goals"}:
+        line = (
+            market_line(str(market.get("market_name") or market.get("MarketName") or ""))
+            or market_line(str(market.get("market_type") or market.get("MarketType") or ""))
+            or _num(row.get("__line") or row.get("line") or row.get("Line"))
+        )
+        if line is None:
+            return ""
+        side = _selection_side(row)
+        return STANDARD_GOALS_SELECTION_IDS.get(float(line), {}).get(side, "")
+    if family == "btts":
+        side = "no" if _selection_side(row) == "under" else "yes"
+        return STANDARD_BTTS_SELECTION_IDS.get(side, "")
+    return ""
+
+
 def _selection_aliases_for_runner(row: dict[str, str], market: dict[str, Any]) -> list[str]:
     family = row_market_family(market)
     selection = str(row.get("SelectionName") or "").strip()
@@ -465,9 +522,11 @@ def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[st
     runner = _runner_for_catalog_market(enriched, match)
     if runner:
         enriched["SelectionId"] = _runner_selection_id(runner) or str(enriched.get("SelectionId", "0") or "0")
-    start_time = str(match.get("start_time") or "")
-    if len(start_time) >= 10 and start_time[:4].isdigit():
-        enriched["StartTime"] = str(match.get("start_time"))
+    if str(enriched.get("SelectionId") or "").strip() in {"", "0"}:
+        enriched["SelectionId"] = _standard_selection_id(enriched, match) or str(enriched.get("SelectionId", "0") or "0")
+    start_time = _normalize_bfbm_start_time(match.get("start_time") or "")
+    if start_time:
+        enriched["StartTime"] = start_time
     return enriched
 
 
