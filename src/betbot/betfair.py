@@ -195,10 +195,6 @@ def enrich_catalogue_with_books(catalogue: list[dict[str, Any]], books_by_market
                     "bestBackSize": best_back_size,
                     "bestLayPrice": best_lay,
                     "bestLaySize": best_lay_size,
-                    "ex": {
-                        "availableToBack": ex.get("availableToBack") or [],
-                        "availableToLay": ex.get("availableToLay") or [],
-                    },
                 }
             )
             runners.append(runner_item)

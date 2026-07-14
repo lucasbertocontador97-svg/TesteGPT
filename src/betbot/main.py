@@ -563,7 +563,10 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", "0") or "0")
-            raw = self.rfile.read(min(length, 5_000_000))
+            if length > 50_000_000:
+                self.send_error(413, "snapshot too large")
+                return
+            raw = self.rfile.read(length)
             payload = json.loads(raw.decode("utf-8"))
             rows = payload_to_markets(payload if isinstance(payload, dict) else {})
             storage = Storage(settings.database_path)
