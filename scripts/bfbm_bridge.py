@@ -169,7 +169,22 @@ def _market_id_value_from(row: dict[str, Any], *names: str) -> str:
 
 def _start_time_value_from(row: dict[str, Any], *names: str) -> str:
     value = _value_from(row, *names)
-    return value if value else "0001-01-01 00:00:00"
+    if not value:
+        return "0001-01-01 00:00:00"
+    text = str(value).strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", text):
+        return text
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            return parsed.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return text
 
 
 STANDARD_GOALS_SELECTION_IDS: dict[float, dict[str, str]] = {
