@@ -70,3 +70,22 @@ O scanner le esses CSVs a cada poucos segundos, salva um snapshot local e envia 
 O scanner nao decide odds. Ele apenas confirma que o mercado existe no BFBM; a odd minima continua protegida pelo `MinPrice` do CSV e pela estrategia do BFBM.
 
 Rotina recomendada: atualize esses dois arquivos pelo BFBM pelo menos uma vez por dia. O bot aceita catalogos com ate 7 dias, mas quanto mais recente, menor a chance de um mercado ter mudado antes da partida.
+
+## API para outros sistemas
+
+Depois que a ponte/scanner alimenta o bot, outros sistemas podem consultar o cache Betfair do TesteGPT sem chamar a Betfair diretamente.
+
+Documentacao:
+
+```text
+docs/BETFAIR_CACHE_API.md
+```
+
+Endpoint:
+
+```text
+GET https://testegpt-production.up.railway.app/api/betfair/cache
+Header: X-Api-Key: <BETFAIR_CACHE_API_KEY>
+```
+
+Esse endpoint e somente leitura e devolve os mercados que o bot ja tem salvos no banco.

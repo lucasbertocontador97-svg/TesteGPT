@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import sys
@@ -16,7 +17,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
 from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, full_rows_with_audit, rows_to_full_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
-from .bfbm_markets import _event_score, event_score_for_row, find_bfbm_market, market_family, market_line, payload_to_markets
+from .bfbm_markets import _event_score, event_score_for_row, find_bfbm_market, market_family, market_line, payload_to_markets, row_market_family
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import database_storage_status, load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -38,6 +39,8 @@ logger = logging.getLogger("betbot")
 MARKET_LABELS = {
     ("goals", "over"): "Mais gols",
     ("goals", "under"): "Menos gols",
+    ("first_half_goals", "over"): "Mais gols HT",
+    ("first_half_goals", "under"): "Menos gols HT",
     ("corners", "over"): "Mais escanteios",
     ("corners", "under"): "Menos escanteios",
     ("btts", "yes"): "Ambos marcam",
@@ -201,8 +204,8 @@ def bfbm_available_market_specs(catalog_rows: list[dict], event_name: str, min_s
             continue
         if _event_score(event_name, str(row.get("event_name") or "")) < min_score:
             continue
-        family = market_family(str(row.get("market_name") or ""))
-        line = market_line(str(row.get("market_name") or ""))
+        family = row_market_family(row)
+        line = market_line(str(row.get("market_name") or "")) or market_line(str(row.get("market_type") or ""))
         market_type = str(row.get("market_type") or "").casefold()
         market_name = str(row.get("market_name") or "").casefold()
         if family == "goals" and line is None and ("alt_total_goals" in market_type or "linhas de gol" in market_name):
@@ -537,6 +540,16 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _check_betfair_cache_key(self, settings) -> bool:
+        if not settings.betfair_cache_api_key:
+            self.send_error(503, "BETFAIR_CACHE_API_KEY not configured")
+            return False
+        provided = self.headers.get("X-Api-Key", "").strip()
+        if not hmac.compare_digest(provided, settings.betfair_cache_api_key):
+            self.send_error(401)
+            return False
+        return True
+
     def do_POST(self) -> None:
         settings = load_settings()
         parsed = urlparse(self.path)
@@ -598,6 +611,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/export-audit.json",
             "/bfbm/system-health.json",
             "/bfbm/notify-bet",
+            "/api/betfair/cache",
             "/health",
         }:
             self.send_error(404)
@@ -606,6 +620,60 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"ok")
+            return
+        if parsed.path == "/api/betfair/cache":
+            if not self._check_betfair_cache_key(settings):
+                return
+            query = parse_qs(parsed.query)
+            try:
+                max_age_minutes = int(query.get("max_age_minutes", ["15"])[0])
+            except ValueError:
+                max_age_minutes = 15
+            try:
+                limit = int(query.get("limit", ["5000"])[0])
+            except ValueError:
+                limit = 5000
+            market_type = query.get("market_type", [""])[0].strip().upper()
+            event_search = query.get("event", [""])[0].strip().casefold()
+            include_raw = query.get("include_raw", ["0"])[0].lower() in {"1", "true", "yes", "sim"}
+            storage = Storage(settings.database_path)
+            try:
+                rows = storage.bfbm_markets(max_age_minutes=max(1, min(1440, max_age_minutes)))
+            finally:
+                storage.close()
+            if market_type:
+                rows = [row for row in rows if str(row.get("market_type") or "").upper() == market_type]
+            if event_search:
+                rows = [row for row in rows if event_search in str(row.get("event_name") or "").casefold()]
+            rows = rows[: max(1, min(10000, limit))]
+            for row in rows:
+                raw_json = row.get("raw_json")
+                if include_raw and isinstance(raw_json, str) and raw_json:
+                    try:
+                        row["raw"] = json.loads(raw_json)
+                    except json.JSONDecodeError:
+                        row["raw"] = None
+                if not include_raw:
+                    row.pop("raw_json", None)
+            data = {
+                "ok": True,
+                "source": "bfbm_betfair_cache",
+                "count": len(rows),
+                "max_age_minutes": max(1, min(1440, max_age_minutes)),
+                "filters": {
+                    "market_type": market_type,
+                    "event": event_search,
+                    "include_raw": include_raw,
+                },
+                "markets": rows,
+            }
+            body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "private, max-age=5")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if not settings.bfbm_export:
             self.send_error(404, "BFBM export disabled")
@@ -1992,12 +2060,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 final_reason = math_signal.reason
                 final_stake = "baixa"
 
-            market_label = {
-                ("goals", "over"): "Mais gols",
-                ("goals", "under"): "Menos gols",
-                ("corners", "over"): "Mais escanteios",
-                ("corners", "under"): "Menos escanteios",
-            }.get((math_signal.market_family, math_signal.selection), f"{math_signal.market_family} {math_signal.selection}")
+            market_label_text = market_label(math_signal.market_family, math_signal.selection)
             final_line = math_signal.line
             alert_key = verified_alert_key(game, math_signal.market_family, math_signal.selection, final_line)
             if storage.seen_alert(alert_key):
@@ -2007,7 +2070,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
             decision = Decision(
                 True,
                 final_confidence,
-                market_label,
+                market_label_text,
                 math_signal.selection,
                 "Conferir manualmente",
                 0.0,
@@ -2028,7 +2091,7 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"Liga: {game.league or '-'}\n"
                 f"Tempo: {minute}\n"
                 f"Placar: {score}\n"
-                f"Mercado indicado: {market_label}{line_label}\n"
+                f"Mercado indicado: {market_label_text}{line_label}\n"
                 f"Direcao: {math_signal.selection}\n"
                 f"Probabilidade Poisson: {math_signal.probability:.0%}\n"
                 f"Score de conviccao: {final_confidence}/100\n"
@@ -2121,12 +2184,7 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
             return
 
         signal, game, required_confidence = sorted(candidates, key=lambda item: (item[0].score, item[0].probability), reverse=True)[0]
-        market_label = {
-            ("goals", "over"): "Mais gols",
-            ("goals", "under"): "Menos gols",
-            ("corners", "over"): "Mais escanteios",
-            ("corners", "under"): "Menos escanteios",
-        }.get((signal.market_family, signal.selection), f"{signal.market_family} {signal.selection}")
+        market_label_text = market_label(signal.market_family, signal.selection)
         alert_key = verified_alert_key(game, signal.market_family, signal.selection, signal.line)
         if storage.seen_alert(alert_key):
             await update.message.reply_text("A melhor entrada veridica encontrada ja foi enviada antes.")
@@ -2136,7 +2194,7 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
         decision = Decision(
             True,
             signal.confidence,
-            market_label,
+            market_label_text,
             signal.selection,
             "Conferir manualmente",
             0.0,
@@ -2158,7 +2216,7 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
             f"Liga: {game.league or '-'}\n"
             f"Tempo: {minute}\n"
             f"Placar: {score}\n"
-            f"Mercado: {market_label}{line_label}\n"
+            f"Mercado: {market_label_text}{line_label}\n"
             f"Direcao: {signal.selection}\n"
             f"Probabilidade Poisson: {signal.probability:.0%}\n"
             f"Score de conviccao: {signal.score}/100\n"
