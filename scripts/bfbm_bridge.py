@@ -288,6 +288,7 @@ class BridgeState:
         return (
             _valid_betfair_id(row.get("EventId", ""))
             and _valid_betfair_market_id(row.get("MarketId", ""))
+            and _valid_betfair_id(row.get("SelectionId", ""))
         )
 
     def _visible_rows(self, rows: list[dict[str, str]] | None = None) -> list[dict[str, str]]:
@@ -312,6 +313,22 @@ class BridgeState:
         cleaned: list[dict[str, str]] = []
         seen: set[tuple[str, str, str, str]] = set()
         now_ts = _now_ts()
+        with self.lock:
+            manual_rows = [
+                row
+                for row in self.rows
+                if row.get("__raw") == "1"
+                and now_ts - _float(str(row.get("__last_seen") or now_ts), now_ts) <= self.tip_keep_seconds
+                and self._has_required_ids(row)
+            ]
+        for row in manual_rows:
+            key = self._row_key(row)
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(row)
+            if len(cleaned) >= self.max_tips:
+                break
         for row in rows:
             key = self._row_key(row)
             if not row.get("EventName", "") or key in seen:
@@ -589,14 +606,14 @@ def main() -> None:
     parser.add_argument("--source-url", default="")
     parser.add_argument("--source-poll-seconds", type=int, default=20)
     parser.add_argument("--notify-url", default="")
-    parser.add_argument("--notify-sid-filter", default="CODEX-TESTEGPT")
+    parser.add_argument("--notify-sid-filter", default="")
     parser.add_argument("--api-token", default="")
     parser.add_argument("--min-price", type=float, default=1.80)
     parser.add_argument("--max-price", type=float, default=100.00)
     parser.add_argument("--max-tips", type=int, default=4)
     parser.add_argument("--tip-keep-seconds", type=int, default=600)
     parser.add_argument("--allow-missing-ids", action="store_true", help="Permite enviar tips sem EventId/MarketId/SelectionId.")
-    parser.add_argument("--require-ids", action="store_true", help="Exige EventId e MarketId antes de repassar ao BFBM.")
+    parser.add_argument("--require-ids", action="store_true", help="Exige EventId, MarketId e SelectionId antes de repassar ao BFBM.")
     parser.add_argument(
         "--log-path",
         default=str(Path.home() / "AppData/Local/bfbotmanager.com/Bf Bot Manager V3/log.txt"),

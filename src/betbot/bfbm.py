@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .bfbm_markets import find_bfbm_market, map_selection_to_event, market_family, market_line
+from .bfbm_markets import find_bfbm_market, map_selection_to_event, market_family, market_line, normalize_text, row_market_family
 
 
 BFBM_COLUMNS = [
@@ -77,6 +78,24 @@ def _over_under_market_type(line: float) -> str | None:
     if int(round(doubled)) % 2 == 0:
         return None
     return f"OVER_UNDER_{int(round(line * 10)):02d}"
+
+
+def _first_half_goals_market_type(line: float) -> str | None:
+    doubled = line * 2
+    if abs(doubled - round(doubled)) > 0.001:
+        return None
+    if int(round(doubled)) % 2 == 0:
+        return None
+    return f"FIRST_HALF_GOALS_{int(round(line * 10)):02d}"
+
+
+def _corner_market_type(line: float) -> str | None:
+    doubled = line * 2
+    if abs(doubled - round(doubled)) > 0.001:
+        return None
+    if int(round(doubled)) % 2 == 0:
+        return None
+    return f"OVER_UNDER_{int(round(line * 10)):02d}_CORNR"
 
 
 def _event_name(alert: dict[str, Any]) -> str:
@@ -156,14 +175,19 @@ def _goal_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     line = _num(alert.get("line"))
     if line is None:
         return None
-    market_type = _over_under_market_type(line)
+    strategy = str(alert.get("strategy") or "").upper()
+    is_first_half = strategy.endswith("_HT") or "FIRST_HALF" in strategy
+    market_type = _first_half_goals_market_type(line) if is_first_half else _over_under_market_type(line)
     if not market_type:
         return None
     side = "Mais" if str(alert.get("selection", "")).lower() == "over" else "Menos"
     display_line = _bfbm_line_text(line)
+    market_name = f"Mais/Menos de {display_line} Gols"
+    if is_first_half:
+        market_name = f"Mais/Menos de {display_line} Gols no 1º Tempo"
     return {
         "MarketType": market_type,
-        "MarketName": f"Mais/Menos de {display_line} Gols",
+        "MarketName": market_name,
         "SelectionName": f"{side} de {display_line} Gols",
         "__line": str(line),
     }
@@ -173,10 +197,9 @@ def _corner_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     line = _num(alert.get("line"))
     if line is None:
         return None
-    line_label = _line_text(line)
     side = "Over" if str(alert.get("selection", "")).lower() == "over" else "Under"
     return {
-        "MarketType": "COMBINED_TOTAL",
+        "MarketType": _corner_market_type(line) or "CORNER_ODDS",
         "MarketName": f"Mais/Menos de {_bfbm_line_text(line)} Escanteios",
         "SelectionName": f"{'Mais' if side == 'Over' else 'Menos'} de {_bfbm_line_text(line)} escanteios",
         "__line": str(line),
@@ -209,15 +232,56 @@ def _btts_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     }
 
 
+def _draw_no_bet_tip(alert: dict[str, Any]) -> dict[str, str] | None:
+    selection = str(alert.get("selection", "") or "").strip()
+    if not selection:
+        return None
+    return {
+        "MarketType": "DRAW_NO_BET",
+        "MarketName": "Empate Anula Aposta",
+        "SelectionName": selection,
+    }
+
+
+def _double_chance_tip(alert: dict[str, Any]) -> dict[str, str] | None:
+    selection = normalize_text(alert.get("selection", ""))
+    aliases = {
+        "home draw": "Home or Draw",
+        "home_draw": "Home or Draw",
+        "casa empate": "Home or Draw",
+        "1x": "Home or Draw",
+        "draw away": "Draw or Away",
+        "draw_away": "Draw or Away",
+        "empate fora": "Draw or Away",
+        "x2": "Draw or Away",
+        "home away": "Home or Away",
+        "home_away": "Home or Away",
+        "casa fora": "Home or Away",
+        "12": "Home or Away",
+    }
+    selection_name = aliases.get(selection, str(alert.get("selection", "") or "").strip())
+    if not selection_name:
+        return None
+    return {
+        "MarketType": "DOUBLE_CHANCE",
+        "MarketName": "Chance Dupla",
+        "SelectionName": selection_name,
+    }
+
+
 def _tip_market(alert: dict[str, Any]) -> dict[str, str] | None:
     market = str(alert.get("market", "")).lower()
-    if any(word in market for word in ("resultado", "match odds", "vitoria", "vitória")):
+    if market in {"draw_no_bet", "draw no bet"} or any(word in market for word in ("empate anula", "anula")):
+        return _draw_no_bet_tip(alert)
+    if market in {"double_chance", "double chance"} or any(word in market for word in ("chance dupla",)):
+        return _double_chance_tip(alert)
+    if market in {"match_odds", "match odds"} or any(word in market for word in ("resultado", "vitoria", "vitória")):
         return _match_odds_tip(alert)
-    if any(word in market for word in ("btts", "ambos", "marcam")):
+    if market in {"btts", "both_teams_to_score"} or any(word in market for word in ("ambos", "marcam")):
         return _btts_tip(alert)
-    if any(word in market for word in ("goal", "gol")):
+    if market in {"goals", "first_half_goals"} or any(word in market for word in ("goal", "gol")):
         return _goal_tip(alert)
-    if any(word in market for word in ("corner", "escanteio")):
+    if market in {"corners", "corner_odds"} or any(word in market for word in ("corner", "escanteio")):
         return _corner_tip(alert)
     return None
 
@@ -256,16 +320,125 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
     return row
 
 
+def _catalog_raw(market: dict[str, Any]) -> dict[str, Any]:
+    raw = market.get("raw")
+    if isinstance(raw, dict):
+        return raw
+    raw_json = market.get("raw_json")
+    if isinstance(raw_json, str) and raw_json.strip():
+        try:
+            parsed = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _catalog_runners(market: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = _catalog_raw(market)
+    runners = raw.get("runners") or market.get("runners") or []
+    return [runner for runner in runners if isinstance(runner, dict)]
+
+
+def _runner_name(runner: dict[str, Any]) -> str:
+    return str(runner.get("runnerName") or runner.get("runner_name") or runner.get("name") or "")
+
+
+def _runner_selection_id(runner: dict[str, Any]) -> str:
+    return str(runner.get("selectionId") or runner.get("selection_id") or runner.get("id") or "")
+
+
+def _selection_aliases_for_runner(row: dict[str, str], market: dict[str, Any]) -> list[str]:
+    family = row_market_family(market)
+    selection = str(row.get("SelectionName") or "").strip()
+    aliases = {selection}
+    line = (market_line(str(market.get("market_name") or market.get("MarketName") or "")) or market_line(str(market.get("market_type") or market.get("MarketType") or "")) or _num(row.get("__line")))
+    line_dot = f"{line:g}" if line is not None else ""
+    line_comma = line_dot.replace(".", ",")
+    selection_norm = normalize_text(selection)
+    is_under = any(token in selection_norm for token in ("menos", "under", "no", "nao", "não"))
+    if family in {"goals", "first_half_goals"} and line_dot:
+        side_en = "Under" if is_under else "Over"
+        side_pt = "Menos" if is_under else "Mais"
+        aliases.update(
+            {
+                f"{side_en} {line_dot} Goals",
+                f"{side_en} {line_dot} goals",
+                f"{side_pt} de {line_comma} Gols",
+                f"{side_pt} de {line_dot} Gols",
+                f"{side_pt} de {line_comma} gols",
+                f"{side_pt} de {line_dot} gols",
+            }
+        )
+    if family == "corners" and line_dot:
+        side_en = "Under" if is_under else "Over"
+        side_pt = "Menos" if is_under else "Mais"
+        aliases.update(
+            {
+                f"{side_en} {line_dot} Corners",
+                f"{side_en} {line_dot} corners",
+                f"{side_pt} de {line_comma} Escanteios",
+                f"{side_pt} de {line_dot} Escanteios",
+                f"{side_pt} de {line_comma} escanteios",
+                f"{side_pt} de {line_dot} escanteios",
+            }
+        )
+    if family == "btts":
+        aliases.update({"No", "Nao", "Não", "NÃ£o"} if is_under else {"Yes", "Sim"})
+    if family in {"match_odds", "draw_no_bet"}:
+        aliases.add(map_selection_to_event(selection, str(market.get("event_name") or "")))
+    if family == "double_chance":
+        normalized = normalize_text(selection)
+        event_name = str(market.get("event_name") or market.get("EventName") or "")
+        home = away = ""
+        if " x " in event_name:
+            home, away = [part.strip() for part in event_name.split(" x ", 1)]
+        elif " v " in event_name:
+            home, away = [part.strip() for part in event_name.split(" v ", 1)]
+        if normalized in {"home or draw", "casa empate", "1x"}:
+            aliases.update({"Home or Draw", "1X"})
+            if home:
+                aliases.add(f"{home} or Draw")
+        elif normalized in {"draw or away", "empate fora", "x2"}:
+            aliases.update({"Draw or Away", "X2"})
+            if away:
+                aliases.add(f"Draw or {away}")
+        elif normalized in {"home or away", "casa fora", "12"}:
+            aliases.update({"Home or Away", "12"})
+            if home and away:
+                aliases.add(f"{home} or {away}")
+    return [alias for alias in aliases if alias]
+
+
+def _runner_for_catalog_market(row: dict[str, str], market: dict[str, Any]) -> dict[str, Any] | None:
+    runners = _catalog_runners(market)
+    if not runners:
+        return None
+    desired = {normalize_text(alias) for alias in _selection_aliases_for_runner(row, market)}
+    for runner in runners:
+        runner_name = _runner_name(runner)
+        if normalize_text(runner_name) in desired:
+            return runner
+    for runner in runners:
+        runner_name_norm = normalize_text(_runner_name(runner))
+        if any(alias and (alias in runner_name_norm or runner_name_norm in alias) for alias in desired):
+            return runner
+    return None
+
+
 def _selection_for_catalog_market(row: dict[str, str], market: dict[str, Any]) -> str:
-    family = market_family(market.get("market_name", ""))
+    runner = _runner_for_catalog_market(row, market)
+    if runner:
+        return _runner_name(runner) or str(row.get("SelectionName", ""))
+    family = row_market_family(market)
     selection = row.get("SelectionName", "")
     if family == "match_odds":
         return map_selection_to_event(selection, str(market.get("event_name") or ""))
     if family == "btts":
         original = selection.lower()
         return "Não" if "nao" in original or "não" in original or original == "no" else "Sim"
-    if family in {"goals", "corners"}:
-        line = market_line(str(market.get("market_name") or "")) or _num(row.get("__line") or row.get("line") or row.get("Line"))
+    if family in {"goals", "first_half_goals", "corners"}:
+        line = (market_line(str(market.get("market_name") or market.get("MarketName") or "")) or market_line(str(market.get("market_type") or market.get("MarketType") or "")) or _num(row.get("__line") or row.get("line") or row.get("Line")))
         line_text = _bfbm_line_text(line) if line is not None else ""
         original = selection.lower()
         side = "Menos" if "menos" in original or "under" in original else "Mais"
@@ -277,8 +450,8 @@ def _selection_for_catalog_market(row: dict[str, str], market: dict[str, Any]) -
 def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[str, Any]]) -> dict[str, str] | None:
     if not catalog_rows:
         return row
-    family = market_family(row.get("MarketName", ""))
-    desired_line = market_line(row.get("MarketName", ""))
+    family = row_market_family(row)
+    desired_line = market_line(row.get("MarketName", "")) or market_line(row.get("MarketType", ""))
     match = find_bfbm_market(catalog_rows, row.get("EventName", ""), family, desired_line)
     if not match:
         return None
@@ -289,6 +462,9 @@ def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[st
     enriched["MarketId"] = str(match.get("market_id") or row.get("MarketId", "0") or "0")
     enriched["MarketType"] = str(match.get("market_type") or row.get("MarketType", ""))
     enriched["SelectionName"] = _selection_for_catalog_market(enriched, match)
+    runner = _runner_for_catalog_market(enriched, match)
+    if runner:
+        enriched["SelectionId"] = _runner_selection_id(runner) or str(enriched.get("SelectionId", "0") or "0")
     start_time = str(match.get("start_time") or "")
     if len(start_time) >= 10 and start_time[:4].isdigit():
         enriched["StartTime"] = str(match.get("start_time"))
@@ -298,7 +474,14 @@ def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[st
 def _has_valid_export_ids(row: dict[str, str]) -> bool:
     event_id = str(row.get("EventId") or "").strip()
     market_id = str(row.get("MarketId") or "").strip()
-    return event_id.isdigit() and event_id != "0" and market_id not in {"", "0"}
+    selection_id = str(row.get("SelectionId") or "").strip()
+    return (
+        event_id.isdigit()
+        and event_id != "0"
+        and market_id not in {"", "0"}
+        and selection_id.isdigit()
+        and selection_id != "0"
+    )
 
 
 def _has_matchable_names(row: dict[str, str]) -> bool:
