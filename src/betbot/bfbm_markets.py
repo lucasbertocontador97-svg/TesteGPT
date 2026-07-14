@@ -242,6 +242,13 @@ def payload_to_markets(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def market_line(market_name: str) -> float | None:
+    normalized = normalize_text(market_name).upper()
+    type_match = re.search(r"(?:OVER_UNDER|FIRST_HALF_GOALS)_(\d{2,3})", normalized)
+    if type_match:
+        try:
+            return float(type_match.group(1)) / 10
+        except ValueError:
+            return None
     match = re.search(r"(\d+(?:[,.]\d+)?)", market_name)
     if not match:
         return None
@@ -253,6 +260,25 @@ def market_line(market_name: str) -> float | None:
 
 def market_family(market_name: str) -> str:
     normalized = normalize_text(market_name)
+    compact = normalized.upper()
+    if re.search(r"OVER_UNDER_\d{2,3}_CORNR", compact):
+        return "corners"
+    if re.search(r"FIRST_HALF_GOALS_\d{2,3}", compact):
+        return "first_half_goals"
+    if re.search(r"OVER_UNDER_\d{2,3}", compact) or compact == "ALT_TOTAL_GOALS":
+        return "goals"
+    if compact == "MATCH_ODDS":
+        return "match_odds"
+    if compact == "BOTH_TEAMS_TO_SCORE":
+        return "btts"
+    if compact == "DOUBLE_CHANCE":
+        return "double_chance"
+    if compact == "DRAW_NO_BET":
+        return "draw_no_bet"
+    if compact == "ASIAN_HANDICAP":
+        return "asian_handicap"
+    if compact in {"CORNER_ODDS", "COMBINED_TOTAL"}:
+        return "corners"
     if "escanteio" in normalized or "corner" in normalized:
         return "corners"
     if (
@@ -266,6 +292,8 @@ def market_family(market_name: str) -> str:
         return "btts"
     if "chance dupla" in normalized or "double chance" in normalized:
         return "double_chance"
+    if "empate anula" in normalized or "draw no bet" in normalized:
+        return "draw_no_bet"
     if "handicap asiatico" in normalized or "asian handicap" in normalized:
         return "asian_handicap"
     if "cartao" in normalized or "booking" in normalized:
@@ -275,6 +303,27 @@ def market_family(market_name: str) -> str:
     if "placar correto" in normalized or "correct score" in normalized:
         return "correct_score"
     return normalized
+
+
+KNOWN_MARKET_FAMILIES = {
+    "asian_handicap",
+    "btts",
+    "cards",
+    "corners",
+    "correct_score",
+    "double_chance",
+    "draw_no_bet",
+    "first_half_goals",
+    "goals",
+    "match_odds",
+}
+
+
+def row_market_family(row: dict[str, Any]) -> str:
+    type_family = market_family(str(row.get("market_type") or row.get("MarketType") or ""))
+    if type_family in KNOWN_MARKET_FAMILIES:
+        return type_family
+    return market_family(str(row.get("market_name") or row.get("MarketName") or ""))
 
 
 def _event_score(left: str, right: str) -> int:
@@ -313,12 +362,13 @@ def find_bfbm_market(
     for row in catalog_rows:
         if not _active_market(row):
             continue
-        if market_family(str(row.get("market_name") or "")) != desired_family:
+        row_family = row_market_family(row)
+        if row_family != desired_family:
             continue
         line_priority = 0
         matched_line_delta = 99.0
         if desired_line is not None:
-            row_line = market_line(str(row.get("market_name") or ""))
+            row_line = market_line(str(row.get("market_name") or "")) or market_line(str(row.get("market_type") or ""))
             market_type = normalize_text(row.get("market_type", ""))
             market_name = normalize_text(row.get("market_name", ""))
             generic_line_market = (
@@ -359,7 +409,8 @@ def find_bfbm_event_family_market(
     for row in catalog_rows:
         if not _active_market(row):
             continue
-        if market_family(str(row.get("market_name") or "")) != desired_family:
+        row_family = row_market_family(row)
+        if row_family != desired_family:
             continue
         score = event_score_for_row(event_name, row)
         if score < min_score:
@@ -381,6 +432,10 @@ def map_selection_to_event(selection: str, bfbm_event_name: str) -> str:
     if not teams:
         return selection
     selection_norm = normalize_text(selection)
+    if selection_norm in {"home", "mandante", "casa", "1"}:
+        return teams[0]
+    if selection_norm in {"away", "visitante", "fora", "2"}:
+        return teams[1]
     for team in teams:
         team_norm = normalize_text(team)
         if selection_norm == team_norm or selection_norm in team_norm or team_norm in selection_norm:
