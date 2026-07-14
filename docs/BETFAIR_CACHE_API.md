@@ -98,13 +98,13 @@ curl -H "X-Api-Key: SUA_CHAVE_AQUI" \
 /api/betfair/cache?event=Flamengo
 ```
 
-### Trazer runners/selecoes completos
+### Trazer JSON bruto completo
 
 ```text
 /api/betfair/cache?include_raw=1
 ```
 
-Use `include_raw=1` quando o outro sistema precisar ler runners, odds ou dados internos que nao aparecem nas colunas normalizadas.
+O endpoint ja retorna runners compactos com odds. Use `include_raw=1` somente quando o outro sistema precisar auditar o JSON completo.
 
 ## Resposta
 
@@ -133,7 +133,20 @@ Use `include_raw=1` quando o outro sistema precisar ler runners, odds ou dados i
       "favorite": "Exemplo FC",
       "winner": "",
       "total_matched": "R$ 10.000,00",
-      "source_age_seconds": 4
+      "source_age_seconds": 4,
+      "runners": [
+        {
+          "selection_id": "47973",
+          "runner_name": "Mais de 2,5 gols",
+          "handicap": 0,
+          "status": "ACTIVE",
+          "best_back_price": 1.86,
+          "best_back_size": 125.4,
+          "best_lay_price": 1.9,
+          "best_lay_size": 88.2,
+          "last_price_traded": 1.87
+        }
+      ]
     }
   ]
 }
@@ -170,7 +183,9 @@ O outro sistema deve:
 3. Usar `max_age_minutes` baixo para dados ao vivo, normalmente `5` a `15`.
 4. Nao chamar Betfair se o dado ja existir neste endpoint.
 5. Ignorar mercados sem `event_id`, `market_id` ou `selection_id` quando precisar operar automaticamente.
-6. Usar `include_raw=1` somente quando precisar dos runners/selecoes completas.
+6. Usar `runners[].best_back_price` como odd principal de back.
+7. Usar `runners[].last_price_traded` como fallback quando nao houver back disponivel.
+8. Usar `include_raw=1` somente para auditoria completa.
 
 ## Fluxo operacional recomendado
 

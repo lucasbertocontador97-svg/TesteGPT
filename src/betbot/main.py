@@ -648,11 +648,33 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             rows = rows[: max(1, min(10000, limit))]
             for row in rows:
                 raw_json = row.get("raw_json")
-                if include_raw and isinstance(raw_json, str) and raw_json:
+                raw = None
+                if isinstance(raw_json, str) and raw_json:
                     try:
-                        row["raw"] = json.loads(raw_json)
+                        raw = json.loads(raw_json)
                     except json.JSONDecodeError:
-                        row["raw"] = None
+                        raw = None
+                compact_runners = []
+                if isinstance(raw, dict):
+                    for runner in raw.get("runners") or []:
+                        if not isinstance(runner, dict):
+                            continue
+                        compact_runners.append(
+                            {
+                                "selection_id": str(runner.get("selectionId") or runner.get("selection_id") or ""),
+                                "runner_name": str(runner.get("runnerName") or runner.get("runner_name") or ""),
+                                "handicap": runner.get("handicap"),
+                                "status": str(runner.get("status") or ""),
+                                "best_back_price": runner.get("bestBackPrice") or runner.get("back") or 0,
+                                "best_back_size": runner.get("bestBackSize") or runner.get("back_size") or 0,
+                                "best_lay_price": runner.get("bestLayPrice") or runner.get("lay") or 0,
+                                "best_lay_size": runner.get("bestLaySize") or runner.get("lay_size") or 0,
+                                "last_price_traded": runner.get("lastPriceTraded") or 0,
+                            }
+                        )
+                row["runners"] = compact_runners
+                if include_raw:
+                    row["raw"] = raw
                 if not include_raw:
                     row.pop("raw_json", None)
             data = {
