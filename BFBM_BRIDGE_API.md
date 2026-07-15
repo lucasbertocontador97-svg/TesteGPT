@@ -95,3 +95,31 @@ Exemplo de resposta:
 ```
 
 Observacao: essa rota nao envia apostas. Ela apenas consulta historico/ordens da Betfair.
+
+## Notificacao automatica de resultado
+
+Quando iniciada com `--result-notify-url`, a ponte consulta as ordens liquidadas da Betfair em loop e notifica o bot no Railway sempre que encontrar uma aposta nova resolvida.
+
+Exemplo de inicializacao:
+
+```text
+python scripts/bfbm_bridge.py ^
+  --result-notify-url "https://SEU_RAILWAY/bfbm/notify-bet-result?token=SEU_TOKEN" ^
+  --orders-poll-seconds 60
+```
+
+Comportamento:
+
+- no primeiro ciclo, a ponte marca as apostas liquidadas antigas como ja vistas;
+- depois disso, cada nova aposta liquidada gera uma mensagem no Telegram;
+- a mensagem mostra GREEN, RED ou VOID;
+- tambem mostra lucro/prejuizo individual e lucro/prejuizo acumulado do dia;
+- a ponte guarda os `betId` ja notificados para nao repetir mensagem.
+
+Endpoint no Railway usado pela ponte:
+
+```text
+GET /bfbm/notify-bet-result?token=SEU_TOKEN&bet_id=...&profit=...&day_profit=...
+```
+
+Esse endpoint e interno da ponte. O BFBM nao precisa chamar ele diretamente.
