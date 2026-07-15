@@ -236,7 +236,7 @@ def settlement_loop(state: BridgeState, notify_url: str | None, poll_seconds: in
     seeded = bool(state.seen_result_bet_ids)
     while True:
         try:
-            payload = _query_betfair_orders(hours=36, limit=1000)
+            payload = _query_betfair_orders(hours=24 * 35, limit=1000)
             cleared_rows = [row for row in (payload.get("cleared", {}).get("rows") or []) if isinstance(row, dict)]
             if not seeded and not state.seen_result_bet_ids:
                 state.seed_result_notifications([str(row.get("betId") or "") for row in cleared_rows])
@@ -770,6 +770,17 @@ class BridgeState:
         self.save()
         return True
 
+    def seed_bet_notifications(self, items: list[dict[str, str]]) -> None:
+        with self.lock:
+            for item in items:
+                bet_id = item.get("bet_id") or item.get("line") or ""
+                if not bet_id or bet_id in self.seen_bet_ids:
+                    continue
+                self.seen_bet_ids.add(bet_id)
+                self.last_bet_notifications.append({"at": _now(), **item})
+            self.last_bet_notifications = self.last_bet_notifications[-20:]
+        self.save()
+
     def seed_result_notifications(self, bet_ids: list[str]) -> None:
         with self.lock:
             self.seen_result_bet_ids.update(bet_id for bet_id in bet_ids if bet_id)
@@ -841,6 +852,35 @@ BET_RE = re.compile(
     r"(?P<placed_at>\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}):\s*HandleOnPlaceBets:\s*Placed bet,\s*betId:\s*(?P<bet_id>[^,]+),\s*sizeMatched:\s*(?P<size>[^,]+),\s*success:\s*(?P<success>[^,]+),\s*strategy:\s*(?P<strategy>[^,]+),\s*sid:\s*(?P<sid>.+)$",
     re.IGNORECASE,
 )
+
+
+def seed_bfbm_log_notifications(state: BridgeState, log_path: Path, max_lines: int = 5000) -> None:
+    if not log_path.exists():
+        return
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()[-max_lines:]
+    except OSError:
+        return
+    items: list[dict[str, str]] = []
+    for line in lines:
+        match = BET_RE.search(line.strip())
+        if not match:
+            continue
+        items.append(
+            {
+                "placed_at": match.group("placed_at").strip(),
+                "bet_id": match.group("bet_id").strip(),
+                "size_matched": match.group("size").strip(),
+                "success": match.group("success").strip(),
+                "strategy": match.group("strategy").strip(),
+                "sid": match.group("sid").strip(),
+                "line": line.strip(),
+                "tips_snapshot": "",
+            }
+        )
+    if items:
+        state.seed_bet_notifications(items)
+        print(f"[log] {len(items[-20:])} aposta(s) recentes reaprendidas do log.")
 
 
 def monitor_bfbm_log(
@@ -1013,9 +1053,11 @@ def main() -> None:
     )
     if args.source_url:
         threading.Thread(target=source_loop, args=(state, args.source_url, args.source_poll_seconds), daemon=True).start()
+    log_path = Path(args.log_path)
+    seed_bfbm_log_notifications(state, log_path)
     threading.Thread(
         target=monitor_bfbm_log,
-        args=(state, Path(args.log_path), args.notify_url or None, 2, args.notify_sid_filter),
+        args=(state, log_path, args.notify_url or None, 2, args.notify_sid_filter),
         daemon=True,
     ).start()
     if args.result_notify_url:
