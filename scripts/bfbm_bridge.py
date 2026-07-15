@@ -4,16 +4,20 @@ import argparse
 import csv
 import json
 import re
+import sys
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
 RICH_COLUMNS = [
     "Provider",
@@ -54,6 +58,10 @@ def _now_ts() -> float:
     return datetime.now(timezone.utc).timestamp()
 
 
+def _iso_utc(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def _read_url(url: str, timeout: int = 15) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "TesteGPT-BFBM-Bridge/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -66,6 +74,81 @@ def _post_url(url: str, params: dict[str, str], timeout: int = 15) -> None:
     req = urllib.request.Request(full_url, headers={"User-Agent": "TesteGPT-BFBM-Bridge/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as response:
         response.read()
+
+
+def _safe_order(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "betId": row.get("betId"),
+        "marketId": row.get("marketId"),
+        "selectionId": row.get("selectionId"),
+        "handicap": row.get("handicap"),
+        "price": row.get("priceMatched") or row.get("priceRequested") or row.get("averagePriceMatched"),
+        "size": row.get("sizeSettled") or row.get("sizeMatched") or row.get("sizeRemaining") or row.get("sizeCancelled"),
+        "profit": row.get("profit"),
+        "side": row.get("side"),
+        "status": row.get("status") or row.get("orderStatus"),
+        "placedDate": row.get("placedDate"),
+        "settledDate": row.get("settledDate"),
+        "persistenceType": row.get("persistenceType"),
+        "orderType": row.get("orderType"),
+    }
+
+
+def _orders_summary(label: str, payload: dict[str, Any], key: str, limit: int) -> dict[str, Any]:
+    rows = [row for row in (payload.get(key) or []) if isinstance(row, dict)]
+    total_profit = 0.0
+    for row in rows:
+        try:
+            total_profit += float(row.get("profit") or 0)
+        except (TypeError, ValueError):
+            pass
+    return {
+        "label": label,
+        "count": len(rows),
+        "moreAvailable": bool(payload.get("moreAvailable")),
+        "totalProfit": round(total_profit, 2),
+        "rows": [_safe_order(row) for row in rows[:limit]],
+    }
+
+
+def _query_betfair_orders(
+    *,
+    hours: int,
+    limit: int,
+    bet_ids: list[str] | None = None,
+    market_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    from dotenv import load_dotenv
+    from betbot.betfair import BetfairClient, credentials_from_env
+
+    load_dotenv(REPO_ROOT / ".env")
+    client = BetfairClient(credentials_from_env())
+    client.login()
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=max(1, min(24 * 30, hours)))
+    date_range = {"from": _iso_utc(since), "to": _iso_utc(now)}
+    record_count = max(1, min(1000, limit))
+
+    current = client.current_orders(
+        bet_ids=bet_ids or None,
+        market_ids=market_ids or None,
+        record_count=record_count,
+    )
+    cleared = client.cleared_orders(
+        bet_ids=bet_ids or None,
+        market_ids=market_ids or None,
+        settled_date_range=date_range,
+        record_count=record_count,
+    )
+
+    return {
+        "ok": True,
+        "generated_at": _iso_utc(now),
+        "window": date_range,
+        "current": _orders_summary("current", current, "currentOrders", record_count),
+        "cleared": _orders_summary("cleared", cleared, "clearedOrders", record_count),
+    }
 
 
 def _csv_text(rows: list[dict[str, str]]) -> str:
@@ -617,6 +700,27 @@ def make_handler(state: BridgeState, api_token: str | None) -> type[BaseHTTPRequ
                 body = json.dumps(state.history(), ensure_ascii=False, indent=2).encode("utf-8")
                 self._send(200, body, "application/json; charset=utf-8")
                 return
+            if parsed.path == "/betfair/orders.json":
+                if not self._authorized():
+                    self._send(403, b"forbidden\n", "text/plain; charset=utf-8")
+                    return
+                query = urllib.parse.parse_qs(parsed.query)
+                try:
+                    hours = int(query.get("hours", ["24"])[0])
+                    limit = int(query.get("limit", ["50"])[0])
+                    payload = _query_betfair_orders(
+                        hours=hours,
+                        limit=limit,
+                        bet_ids=query.get("betId") or query.get("bet_id"),
+                        market_ids=query.get("marketId") or query.get("market_id"),
+                    )
+                except Exception as exc:  # noqa: BLE001 - bridge endpoint must return JSON errors.
+                    payload = {"ok": False, "error": type(exc).__name__, "message": str(exc)}
+                    self._send(500, json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"), "application/json; charset=utf-8")
+                    return
+                body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+                self._send(200, body, "application/json; charset=utf-8")
+                return
             if parsed.path == "/tips.csv":
                 body = ("\ufeff" + state.csv()).encode("utf-8")
                 self._send(200, body, "text/csv; charset=utf-8")
@@ -697,6 +801,7 @@ def main() -> None:
     server = ThreadingHTTPServer((args.host, args.port), make_handler(state, args.api_token or None))
     print(f"Ponte BFBM ativa: http://{args.host}:{args.port}/tips.csv")
     print(f"Status: http://{args.host}:{args.port}/status")
+    print(f"Ordens Betfair: http://{args.host}:{args.port}/betfair/orders.json")
     server.serve_forever()
 
 
