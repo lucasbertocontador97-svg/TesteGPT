@@ -113,8 +113,9 @@ Comportamento:
 - no primeiro ciclo, a ponte marca as apostas liquidadas antigas como ja vistas;
 - depois disso, cada nova aposta liquidada gera uma mensagem no Telegram;
 - a mensagem mostra GREEN, RED ou VOID;
-- tambem mostra lucro/prejuizo individual e lucro/prejuizo acumulado do dia;
+- tambem mostra a estrategia, lucro/prejuizo individual, lucro/prejuizo acumulado do dia e lucro/prejuizo acumulado do mes;
 - a ponte guarda os `betId` ja notificados para nao repetir mensagem.
+- a cada 2 dias, a ponte envia um resumo automatico com saldo do dia e acumulado mensal.
 
 Endpoint no Railway usado pela ponte:
 

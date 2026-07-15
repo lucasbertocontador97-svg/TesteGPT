@@ -160,6 +160,36 @@ def _daily_settlement_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _monthly_settlement_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    today = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+    month_key = today.strftime("%Y-%m")
+    month_rows = [row for row in rows if _local_date(row.get("settledDate")).startswith(month_key)]
+    profit = 0.0
+    wins = 0
+    losses = 0
+    pushes = 0
+    for row in month_rows:
+        try:
+            value = float(row.get("profit") or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        profit += value
+        if value > 0:
+            wins += 1
+        elif value < 0:
+            losses += 1
+        else:
+            pushes += 1
+    return {
+        "month": month_key,
+        "count": len(month_rows),
+        "wins": wins,
+        "losses": losses,
+        "pushes": pushes,
+        "profit": round(profit, 2),
+    }
+
+
 def _query_betfair_orders(
     *,
     hours: int,
@@ -216,6 +246,7 @@ def settlement_loop(state: BridgeState, notify_url: str | None, poll_seconds: in
                 continue
             seeded = True
             daily = _daily_settlement_summary(cleared_rows)
+            monthly = _monthly_settlement_summary(cleared_rows)
             for row in sorted(cleared_rows, key=lambda item: str(item.get("settledDate") or "")):
                 bet_id = str(row.get("betId") or "").strip()
                 if not bet_id:
@@ -233,6 +264,7 @@ def settlement_loop(state: BridgeState, notify_url: str | None, poll_seconds: in
                     "profit": f"{profit:.2f}",
                     "side": str(row.get("side") or ""),
                     "status": str(row.get("status") or "SETTLED"),
+                    "strategy": state.strategy_for_bet(bet_id),
                     "placed_at": str(row.get("placedDate") or ""),
                     "settled_at": str(row.get("settledDate") or ""),
                     "day_date": str(daily["date"]),
@@ -241,6 +273,12 @@ def settlement_loop(state: BridgeState, notify_url: str | None, poll_seconds: in
                     "day_losses": str(daily["losses"]),
                     "day_pushes": str(daily["pushes"]),
                     "day_profit": f"{float(daily['profit']):.2f}",
+                    "month": str(monthly["month"]),
+                    "month_count": str(monthly["count"]),
+                    "month_wins": str(monthly["wins"]),
+                    "month_losses": str(monthly["losses"]),
+                    "month_pushes": str(monthly["pushes"]),
+                    "month_profit": f"{float(monthly['profit']):.2f}",
                 }
                 if not state.register_result_notification(item):
                     continue
@@ -250,6 +288,28 @@ def settlement_loop(state: BridgeState, notify_url: str | None, poll_seconds: in
                     _post_url(notify_url, item)
                 except Exception as exc:  # noqa: BLE001
                     print(f"[settlement] erro ao notificar Railway: {type(exc).__name__}: {exc}")
+            if state.should_send_periodic_summary(str(daily["date"]), every_days=2):
+                summary = {
+                    "kind": "summary",
+                    "day_date": str(daily["date"]),
+                    "day_count": str(daily["count"]),
+                    "day_wins": str(daily["wins"]),
+                    "day_losses": str(daily["losses"]),
+                    "day_pushes": str(daily["pushes"]),
+                    "day_profit": f"{float(daily['profit']):.2f}",
+                    "month": str(monthly["month"]),
+                    "month_count": str(monthly["count"]),
+                    "month_wins": str(monthly["wins"]),
+                    "month_losses": str(monthly["losses"]),
+                    "month_pushes": str(monthly["pushes"]),
+                    "month_profit": f"{float(monthly['profit']):.2f}",
+                }
+                try:
+                    _post_url(notify_url, summary)
+                    state.mark_periodic_summary_sent(str(daily["date"]))
+                    print(f"[settlement] resumo de 2 dias enviado: dia={_brl(daily['profit'])} mes={_brl(monthly['profit'])}")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[settlement] erro ao enviar resumo: {type(exc).__name__}: {exc}")
         except Exception as exc:  # noqa: BLE001 - settlement monitor must keep running.
             print(f"[settlement] erro: {type(exc).__name__}: {exc}")
         time.sleep(max(30, poll_seconds))
@@ -475,6 +535,7 @@ class BridgeState:
         self.last_source_error: str | None = None
         self.last_bet_notifications: list[dict[str, str]] = []
         self.last_result_notifications: list[dict[str, str]] = []
+        self.last_periodic_summary_date: str | None = None
         self.source_history: list[dict[str, Any]] = []
         self.seen_bet_ids: set[str] = set()
         self.seen_result_bet_ids: set[str] = set()
@@ -502,6 +563,7 @@ class BridgeState:
             self.last_source_error = data.get("last_source_error")
             self.last_bet_notifications = [item for item in data.get("last_bet_notifications", []) if isinstance(item, dict)][-20:]
             self.last_result_notifications = [item for item in data.get("last_result_notifications", []) if isinstance(item, dict)][-50:]
+            self.last_periodic_summary_date = data.get("last_periodic_summary_date") or None
             self.source_history = [item for item in data.get("source_history", []) if isinstance(item, dict)][-200:]
             self.seen_bet_ids = set(data.get("seen_bet_ids", []))
             self.seen_result_bet_ids = set(data.get("seen_result_bet_ids", []))
@@ -515,6 +577,7 @@ class BridgeState:
                 "last_source_error": self.last_source_error,
                 "last_bet_notifications": self.last_bet_notifications[-20:],
                 "last_result_notifications": self.last_result_notifications[-50:],
+                "last_periodic_summary_date": self.last_periodic_summary_date,
                 "source_history": self.source_history[-200:],
                 "seen_bet_ids": sorted(self.seen_bet_ids)[-500:],
                 "seen_result_bet_ids": sorted(self.seen_result_bet_ids)[-2000:],
@@ -682,6 +745,7 @@ class BridgeState:
                 ],
                 "last_bet_notifications": self.last_bet_notifications[-5:],
                 "last_result_notifications": self.last_result_notifications[-5:],
+                "last_periodic_summary_date": self.last_periodic_summary_date,
             }
 
     def history(self) -> list[dict[str, Any]]:
@@ -723,6 +787,32 @@ class BridgeState:
             self.last_result_notifications = self.last_result_notifications[-50:]
         self.save()
         return True
+
+    def strategy_for_bet(self, bet_id: str) -> str:
+        with self.lock:
+            for item in reversed(self.last_bet_notifications):
+                if str(item.get("bet_id") or "") == str(bet_id):
+                    return str(item.get("strategy") or "").strip() or "-"
+        return "-"
+
+    def should_send_periodic_summary(self, today: str, *, every_days: int) -> bool:
+        try:
+            today_date = datetime.fromisoformat(today).date()
+        except ValueError:
+            return False
+        with self.lock:
+            if not self.last_periodic_summary_date:
+                return True
+            try:
+                last_date = datetime.fromisoformat(self.last_periodic_summary_date).date()
+            except ValueError:
+                return True
+            return (today_date - last_date).days >= every_days
+
+    def mark_periodic_summary_sent(self, today: str) -> None:
+        with self.lock:
+            self.last_periodic_summary_date = today
+        self.save()
 
 
 def parse_source_csv(text: str, *, min_price: float, max_price: float) -> list[dict[str, str]]:

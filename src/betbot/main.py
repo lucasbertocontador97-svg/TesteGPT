@@ -943,8 +943,39 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 sign = "+" if value > 0 else ""
                 return f"{sign}R$ {value:.2f}".replace(".", ",")
 
+            if q("kind") == "summary":
+                day_profit = number("day_profit")
+                month_profit = number("month_profit")
+                text = (
+                    "\U0001f4ca RESUMO BFBM\n\n"
+                    f"Dia {q('day_date') or '-'}:\n"
+                    f"Entradas liquidadas: {q('day_count') or '0'}\n"
+                    f"Green: {q('day_wins') or '0'} | Red: {q('day_losses') or '0'} | Void: {q('day_pushes') or '0'}\n"
+                    f"Lucro/prejuizo do dia: {money(day_profit)}\n\n"
+                    f"Mes {q('month') or '-'}:\n"
+                    f"Entradas liquidadas: {q('month_count') or '0'}\n"
+                    f"Green: {q('month_wins') or '0'} | Red: {q('month_losses') or '0'} | Void: {q('month_pushes') or '0'}\n"
+                    f"Lucro/prejuizo acumulado: {money(month_profit)}"
+                )
+                try:
+                    require_telegram_settings(settings)
+                    asyncio.run(send_message(settings.telegram_bot_token, settings.telegram_chat_id, text))
+                    body = b"sent\n"
+                    self.send_response(200)
+                except Exception as exc:
+                    logger.exception("Erro ao notificar resumo BFBM")
+                    body = f"error={type(exc).__name__}\n".encode("utf-8")
+                    self.send_response(500)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
             profit = number("profit")
             day_profit = number("day_profit")
+            month_profit = number("month_profit")
             if profit > 0:
                 title = "\u2705 RESULTADO BFBM - GREEN"
                 result_label = "GREEN"
@@ -960,6 +991,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 f"Bet ID: {q('bet_id') or '-'}\n"
                 f"Market ID: {q('market_id') or '-'}\n"
                 f"Selection ID: {q('selection_id') or '-'}\n"
+                f"Estrategia: {q('strategy') or '-'}\n"
                 f"Direcao: {q('side') or '-'}\n"
                 f"Odd casada: {q('price') or '-'}\n"
                 f"Stake: R$ {(q('size') or '0').replace('.', ',')}\n"
@@ -970,7 +1002,11 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 f"Dia {q('day_date') or '-'}:\n"
                 f"Entradas liquidadas: {q('day_count') or '0'}\n"
                 f"Green: {q('day_wins') or '0'} | Red: {q('day_losses') or '0'} | Void: {q('day_pushes') or '0'}\n"
-                f"Lucro/prejuizo do dia: {money(day_profit)}"
+                f"Lucro/prejuizo do dia: {money(day_profit)}\n\n"
+                f"Mes {q('month') or '-'}:\n"
+                f"Entradas liquidadas: {q('month_count') or '0'}\n"
+                f"Green: {q('month_wins') or '0'} | Red: {q('month_losses') or '0'} | Void: {q('month_pushes') or '0'}\n"
+                f"Lucro/prejuizo acumulado: {money(month_profit)}"
             )
             try:
                 require_telegram_settings(settings)
