@@ -621,6 +621,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/export-audit.json",
             "/bfbm/system-health.json",
             "/bfbm/notify-bet",
+            "/bfbm/notify-bet-result",
             "/api/betfair/cache",
             "/health",
         }:
@@ -918,6 +919,66 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
             except Exception as exc:
                 logger.exception("Erro ao notificar aposta BFBM")
+                body = f"error={type(exc).__name__}\n".encode("utf-8")
+                self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if parsed.path == "/bfbm/notify-bet-result":
+            query = parse_qs(parsed.query)
+
+            def q(name: str) -> str:
+                return query.get(name, [""])[0].strip()
+
+            def number(name: str) -> float:
+                try:
+                    return float(q(name).replace(",", ".") or "0")
+                except ValueError:
+                    return 0.0
+
+            def money(value: float) -> str:
+                sign = "+" if value > 0 else ""
+                return f"{sign}R$ {value:.2f}".replace(".", ",")
+
+            profit = number("profit")
+            day_profit = number("day_profit")
+            if profit > 0:
+                title = "\u2705 RESULTADO BFBM - GREEN"
+                result_label = "GREEN"
+            elif profit < 0:
+                title = "\u274c RESULTADO BFBM - RED"
+                result_label = "RED"
+            else:
+                title = "\u21a9\ufe0f RESULTADO BFBM - VOID"
+                result_label = "VOID"
+
+            text = (
+                f"{title}\n\n"
+                f"Bet ID: {q('bet_id') or '-'}\n"
+                f"Market ID: {q('market_id') or '-'}\n"
+                f"Selection ID: {q('selection_id') or '-'}\n"
+                f"Direcao: {q('side') or '-'}\n"
+                f"Odd casada: {q('price') or '-'}\n"
+                f"Stake: R$ {(q('size') or '0').replace('.', ',')}\n"
+                f"Resultado: {result_label} ({money(profit)})\n"
+                f"Status: {q('status') or 'SETTLED'}\n"
+                f"Entrada: {q('placed_at') or '-'}\n"
+                f"Liquidado: {q('settled_at') or '-'}\n\n"
+                f"Dia {q('day_date') or '-'}:\n"
+                f"Entradas liquidadas: {q('day_count') or '0'}\n"
+                f"Green: {q('day_wins') or '0'} | Red: {q('day_losses') or '0'} | Void: {q('day_pushes') or '0'}\n"
+                f"Lucro/prejuizo do dia: {money(day_profit)}"
+            )
+            try:
+                require_telegram_settings(settings)
+                asyncio.run(send_message(settings.telegram_bot_token, settings.telegram_chat_id, text))
+                body = b"sent\n"
+                self.send_response(200)
+            except Exception as exc:
+                logger.exception("Erro ao notificar resultado BFBM")
                 body = f"error={type(exc).__name__}\n".encode("utf-8")
                 self.send_response(500)
             self.send_header("Content-Type", "text/plain; charset=utf-8")

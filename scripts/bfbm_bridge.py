@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -111,6 +112,54 @@ def _orders_summary(label: str, payload: dict[str, Any], key: str, limit: int) -
     }
 
 
+def _brl(value: Any) -> str:
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        number = 0.0
+    return f"{number:.2f}".replace(".", ",")
+
+
+def _local_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    return parsed.astimezone(ZoneInfo("America/Sao_Paulo")).date().isoformat()
+
+
+def _daily_settlement_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    today = datetime.now(ZoneInfo("America/Sao_Paulo")).date().isoformat()
+    today_rows = [row for row in rows if _local_date(row.get("settledDate")) == today]
+    profit = 0.0
+    wins = 0
+    losses = 0
+    pushes = 0
+    for row in today_rows:
+        try:
+            value = float(row.get("profit") or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        profit += value
+        if value > 0:
+            wins += 1
+        elif value < 0:
+            losses += 1
+        else:
+            pushes += 1
+    return {
+        "date": today,
+        "count": len(today_rows),
+        "wins": wins,
+        "losses": losses,
+        "pushes": pushes,
+        "profit": round(profit, 2),
+    }
+
+
 def _query_betfair_orders(
     *,
     hours: int,
@@ -149,6 +198,61 @@ def _query_betfair_orders(
         "current": _orders_summary("current", current, "currentOrders", record_count),
         "cleared": _orders_summary("cleared", cleared, "clearedOrders", record_count),
     }
+
+
+def settlement_loop(state: BridgeState, notify_url: str | None, poll_seconds: int) -> None:
+    if not notify_url:
+        return
+    seeded = bool(state.seen_result_bet_ids)
+    while True:
+        try:
+            payload = _query_betfair_orders(hours=36, limit=1000)
+            cleared_rows = [row for row in (payload.get("cleared", {}).get("rows") or []) if isinstance(row, dict)]
+            if not seeded and not state.seen_result_bet_ids:
+                state.seed_result_notifications([str(row.get("betId") or "") for row in cleared_rows])
+                seeded = True
+                print(f"[settlement] {len(cleared_rows)} aposta(s) liquidadas antigas marcadas como ja vistas.")
+                time.sleep(max(30, poll_seconds))
+                continue
+            seeded = True
+            daily = _daily_settlement_summary(cleared_rows)
+            for row in sorted(cleared_rows, key=lambda item: str(item.get("settledDate") or "")):
+                bet_id = str(row.get("betId") or "").strip()
+                if not bet_id:
+                    continue
+                try:
+                    profit = float(row.get("profit") or 0)
+                except (TypeError, ValueError):
+                    profit = 0.0
+                item = {
+                    "bet_id": bet_id,
+                    "market_id": str(row.get("marketId") or ""),
+                    "selection_id": str(row.get("selectionId") or ""),
+                    "price": str(row.get("price") or ""),
+                    "size": str(row.get("size") or ""),
+                    "profit": f"{profit:.2f}",
+                    "side": str(row.get("side") or ""),
+                    "status": str(row.get("status") or "SETTLED"),
+                    "placed_at": str(row.get("placedDate") or ""),
+                    "settled_at": str(row.get("settledDate") or ""),
+                    "day_date": str(daily["date"]),
+                    "day_count": str(daily["count"]),
+                    "day_wins": str(daily["wins"]),
+                    "day_losses": str(daily["losses"]),
+                    "day_pushes": str(daily["pushes"]),
+                    "day_profit": f"{float(daily['profit']):.2f}",
+                }
+                if not state.register_result_notification(item):
+                    continue
+                label = "GREEN" if profit > 0 else "RED" if profit < 0 else "VOID"
+                print(f"[settlement] {label} betId={bet_id} profit={_brl(profit)} dia={_brl(daily['profit'])}")
+                try:
+                    _post_url(notify_url, item)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[settlement] erro ao notificar Railway: {type(exc).__name__}: {exc}")
+        except Exception as exc:  # noqa: BLE001 - settlement monitor must keep running.
+            print(f"[settlement] erro: {type(exc).__name__}: {exc}")
+        time.sleep(max(30, poll_seconds))
 
 
 def _csv_text(rows: list[dict[str, str]]) -> str:
@@ -370,8 +474,10 @@ class BridgeState:
         self.last_source_ok: str | None = None
         self.last_source_error: str | None = None
         self.last_bet_notifications: list[dict[str, str]] = []
+        self.last_result_notifications: list[dict[str, str]] = []
         self.source_history: list[dict[str, Any]] = []
         self.seen_bet_ids: set[str] = set()
+        self.seen_result_bet_ids: set[str] = set()
         self.load()
 
     def load(self) -> None:
@@ -395,8 +501,10 @@ class BridgeState:
             self.last_source_ok = data.get("last_source_ok")
             self.last_source_error = data.get("last_source_error")
             self.last_bet_notifications = [item for item in data.get("last_bet_notifications", []) if isinstance(item, dict)][-20:]
+            self.last_result_notifications = [item for item in data.get("last_result_notifications", []) if isinstance(item, dict)][-50:]
             self.source_history = [item for item in data.get("source_history", []) if isinstance(item, dict)][-200:]
             self.seen_bet_ids = set(data.get("seen_bet_ids", []))
+            self.seen_result_bet_ids = set(data.get("seen_result_bet_ids", []))
 
     def save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -406,8 +514,10 @@ class BridgeState:
                 "last_source_ok": self.last_source_ok,
                 "last_source_error": self.last_source_error,
                 "last_bet_notifications": self.last_bet_notifications[-20:],
+                "last_result_notifications": self.last_result_notifications[-50:],
                 "source_history": self.source_history[-200:],
                 "seen_bet_ids": sorted(self.seen_bet_ids)[-500:],
+                "seen_result_bet_ids": sorted(self.seen_result_bet_ids)[-2000:],
             }
         self.state_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -571,6 +681,7 @@ class BridgeState:
                     for row in self._visible_rows()
                 ],
                 "last_bet_notifications": self.last_bet_notifications[-5:],
+                "last_result_notifications": self.last_result_notifications[-5:],
             }
 
     def history(self) -> list[dict[str, Any]]:
@@ -592,6 +703,24 @@ class BridgeState:
             self.seen_bet_ids.add(bet_id)
             self.last_bet_notifications.append({"at": _now(), **item})
             self.last_bet_notifications = self.last_bet_notifications[-20:]
+        self.save()
+        return True
+
+    def seed_result_notifications(self, bet_ids: list[str]) -> None:
+        with self.lock:
+            self.seen_result_bet_ids.update(bet_id for bet_id in bet_ids if bet_id)
+        self.save()
+
+    def register_result_notification(self, item: dict[str, str]) -> bool:
+        bet_id = item.get("bet_id") or ""
+        if not bet_id:
+            return False
+        with self.lock:
+            if bet_id in self.seen_result_bet_ids:
+                return False
+            self.seen_result_bet_ids.add(bet_id)
+            self.last_result_notifications.append({"at": _now(), **item})
+            self.last_result_notifications = self.last_result_notifications[-50:]
         self.save()
         return True
 
@@ -764,7 +893,9 @@ def main() -> None:
     parser.add_argument("--source-url", default="")
     parser.add_argument("--source-poll-seconds", type=int, default=20)
     parser.add_argument("--notify-url", default="")
+    parser.add_argument("--result-notify-url", default="")
     parser.add_argument("--notify-sid-filter", default="")
+    parser.add_argument("--orders-poll-seconds", type=int, default=60)
     parser.add_argument("--api-token", default="")
     parser.add_argument("--min-price", type=float, default=1.80)
     parser.add_argument("--max-price", type=float, default=100.00)
@@ -797,11 +928,19 @@ def main() -> None:
         args=(state, Path(args.log_path), args.notify_url or None, 2, args.notify_sid_filter),
         daemon=True,
     ).start()
+    if args.result_notify_url:
+        threading.Thread(
+            target=settlement_loop,
+            args=(state, args.result_notify_url or None, args.orders_poll_seconds),
+            daemon=True,
+        ).start()
 
     server = ThreadingHTTPServer((args.host, args.port), make_handler(state, args.api_token or None))
     print(f"Ponte BFBM ativa: http://{args.host}:{args.port}/tips.csv")
     print(f"Status: http://{args.host}:{args.port}/status")
     print(f"Ordens Betfair: http://{args.host}:{args.port}/betfair/orders.json")
+    if args.result_notify_url:
+        print(f"Resultados Betfair: notificando a cada {max(30, args.orders_poll_seconds)}s")
     server.serve_forever()
 
 
