@@ -156,6 +156,76 @@ class BetfairClient:
                     books_by_market_id[market_id] = book
         return books_by_market_id
 
+    def current_orders(
+        self,
+        *,
+        bet_ids: list[str] | None = None,
+        market_ids: list[str] | None = None,
+        order_projection: str = "ALL",
+        date_range: dict[str, str] | None = None,
+        from_record: int = 0,
+        record_count: int = 1000,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "orderProjection": order_projection,
+            "fromRecord": max(0, from_record),
+            "recordCount": max(1, min(1000, record_count)),
+        }
+        if bet_ids:
+            params["betIds"] = [str(item) for item in bet_ids if str(item).strip()]
+        if market_ids:
+            params["marketIds"] = [str(item) for item in market_ids if str(item).strip()]
+        if date_range:
+            params["dateRange"] = date_range
+        return self.call("listCurrentOrders", params, request_id=3001) or {}
+
+    def cleared_orders(
+        self,
+        *,
+        bet_ids: list[str] | None = None,
+        market_ids: list[str] | None = None,
+        bet_status: str = "SETTLED",
+        settled_date_range: dict[str, str] | None = None,
+        group_by: str = "BET",
+        from_record: int = 0,
+        record_count: int = 1000,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "betStatus": bet_status,
+            "groupBy": group_by,
+            "fromRecord": max(0, from_record),
+            "recordCount": max(1, min(1000, record_count)),
+        }
+        if bet_ids:
+            params["betIds"] = [str(item) for item in bet_ids if str(item).strip()]
+        if market_ids:
+            params["marketIds"] = [str(item) for item in market_ids if str(item).strip()]
+        if settled_date_range:
+            params["settledDateRange"] = settled_date_range
+        return self.call("listClearedOrders", params, request_id=3002) or {}
+
+    def market_profit_and_loss(
+        self,
+        market_ids: list[str],
+        *,
+        include_settled_bets: bool = True,
+        include_bsp_bets: bool = True,
+        net_of_commission: bool = True,
+    ) -> list[dict[str, Any]]:
+        clean_ids = [market_id for market_id in dict.fromkeys(str(item) for item in market_ids) if market_id]
+        if not clean_ids:
+            return []
+        return self.call(
+            "listMarketProfitAndLoss",
+            {
+                "marketIds": clean_ids,
+                "includeSettledBets": include_settled_bets,
+                "includeBspBets": include_bsp_bets,
+                "netOfCommission": net_of_commission,
+            },
+            request_id=3003,
+        ) or []
+
 
 def _best_price(items: list[dict[str, Any]]) -> tuple[float, float]:
     if not items:
