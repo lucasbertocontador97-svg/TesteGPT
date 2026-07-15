@@ -238,6 +238,13 @@ def settlement_loop(state: BridgeState, notify_url: str | None, poll_seconds: in
         try:
             payload = _query_betfair_orders(hours=24 * 35, limit=1000)
             cleared_rows = [row for row in (payload.get("cleared", {}).get("rows") or []) if isinstance(row, dict)]
+            if not state.result_history_seeded:
+                state.seed_result_notifications([str(row.get("betId") or "") for row in cleared_rows])
+                state.mark_result_history_seeded()
+                seeded = True
+                print(f"[settlement] bootstrap historico: {len(cleared_rows)} aposta(s) liquidadas marcadas como ja vistas.")
+                time.sleep(max(30, poll_seconds))
+                continue
             if not seeded and not state.seen_result_bet_ids:
                 state.seed_result_notifications([str(row.get("betId") or "") for row in cleared_rows])
                 seeded = True
@@ -536,6 +543,7 @@ class BridgeState:
         self.last_bet_notifications: list[dict[str, str]] = []
         self.last_result_notifications: list[dict[str, str]] = []
         self.last_periodic_summary_date: str | None = None
+        self.result_history_seeded = False
         self.source_history: list[dict[str, Any]] = []
         self.seen_bet_ids: set[str] = set()
         self.seen_result_bet_ids: set[str] = set()
@@ -564,6 +572,7 @@ class BridgeState:
             self.last_bet_notifications = [item for item in data.get("last_bet_notifications", []) if isinstance(item, dict)][-20:]
             self.last_result_notifications = [item for item in data.get("last_result_notifications", []) if isinstance(item, dict)][-50:]
             self.last_periodic_summary_date = data.get("last_periodic_summary_date") or None
+            self.result_history_seeded = bool(data.get("result_history_seeded"))
             self.source_history = [item for item in data.get("source_history", []) if isinstance(item, dict)][-200:]
             self.seen_bet_ids = set(data.get("seen_bet_ids", []))
             self.seen_result_bet_ids = set(data.get("seen_result_bet_ids", []))
@@ -578,6 +587,7 @@ class BridgeState:
                 "last_bet_notifications": self.last_bet_notifications[-20:],
                 "last_result_notifications": self.last_result_notifications[-50:],
                 "last_periodic_summary_date": self.last_periodic_summary_date,
+                "result_history_seeded": self.result_history_seeded,
                 "source_history": self.source_history[-200:],
                 "seen_bet_ids": sorted(self.seen_bet_ids)[-500:],
                 "seen_result_bet_ids": sorted(self.seen_result_bet_ids)[-2000:],
@@ -746,6 +756,7 @@ class BridgeState:
                 "last_bet_notifications": self.last_bet_notifications[-5:],
                 "last_result_notifications": self.last_result_notifications[-5:],
                 "last_periodic_summary_date": self.last_periodic_summary_date,
+                "result_history_seeded": self.result_history_seeded,
             }
 
     def history(self) -> list[dict[str, Any]]:
@@ -784,6 +795,11 @@ class BridgeState:
     def seed_result_notifications(self, bet_ids: list[str]) -> None:
         with self.lock:
             self.seen_result_bet_ids.update(bet_id for bet_id in bet_ids if bet_id)
+        self.save()
+
+    def mark_result_history_seeded(self) -> None:
+        with self.lock:
+            self.result_history_seeded = True
         self.save()
 
     def register_result_notification(self, item: dict[str, str]) -> bool:
