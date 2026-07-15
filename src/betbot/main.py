@@ -34,6 +34,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
 logger = logging.getLogger("betbot")
+BFBM_TOTALCORNER_MIN_LIVE_EVENTS = 150
 
 
 MARKET_LABELS = {
@@ -307,6 +308,10 @@ def _tc_score_label(match: dict) -> str:
     return f"{_tc_int(match, 'hg')}x{_tc_int(match, 'ag')}"
 
 
+def _bfbm_totalcorner_live_limit(settings) -> int:
+    return max(settings.max_live_events, BFBM_TOTALCORNER_MIN_LIVE_EVENTS)
+
+
 async def bfbm_totalcorner_overlap(settings) -> dict:
     storage = Storage(settings.database_path)
     try:
@@ -316,8 +321,9 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
 
     http = HttpJsonClient()
     totalcorner_error = ""
+    totalcorner_limit = _bfbm_totalcorner_live_limit(settings)
     try:
-        live = await TotalCornerClient(settings.totalcorner_token, http).today_inplay(settings.max_live_events) if settings.totalcorner_token else []
+        live = await TotalCornerClient(settings.totalcorner_token, http).today_inplay(totalcorner_limit) if settings.totalcorner_token else []
     except Exception as exc:
         logger.warning("TotalCorner overlap falhou: %s", exc)
         live = []
@@ -426,6 +432,7 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
 
     return {
         "totalcorner_live": len(live),
+        "totalcorner_limit": totalcorner_limit,
         "totalcorner_error": totalcorner_error,
         "totalcorner_accepted": len(accepted),
         "totalcorner_blocked": len(blocked),
@@ -445,7 +452,7 @@ async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, stora
     catalog_rows = storage.bfbm_markets(15)
     if not catalog_rows:
         return []
-    live = await load_totalcorner_live(settings, http)
+    live = await load_totalcorner_live(settings, http, limit=_bfbm_totalcorner_live_limit(settings))
     snapshots: list[GameSnapshot] = []
     learned_aliases: list[dict] = []
     for index, match in enumerate(live):
@@ -1122,11 +1129,11 @@ async def load_thestatsapi_live(settings, http: HttpJsonClient) -> list[dict]:
         return []
 
 
-async def load_totalcorner_live(settings, http: HttpJsonClient) -> list[dict]:
+async def load_totalcorner_live(settings, http: HttpJsonClient, limit: int | None = None) -> list[dict]:
     if not settings.totalcorner_token:
         return []
     try:
-        live = await TotalCornerClient(settings.totalcorner_token, http).today_inplay(settings.max_live_events)
+        live = await TotalCornerClient(settings.totalcorner_token, http).today_inplay(limit or settings.max_live_events)
         return [
             match
             for match in live

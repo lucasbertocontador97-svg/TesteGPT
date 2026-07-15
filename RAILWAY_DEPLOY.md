@@ -38,6 +38,8 @@ ODDS_USE_MULTI=false
 
 `OPENAI_MODEL` pode ficar vazio; o bot usa o padrao do codigo.
 
+Observacao para operacao BFBM/Betfair: `MAX_LIVE_EVENTS` continua limitando algumas fontes gerais, mas o cruzamento BFBM + TotalCorner varre no minimo 150 jogos ao vivo por ciclo. Isso evita perder jogos que aparecem mais abaixo na lista da TotalCorner enquanto a Betfair ja tem mercado carregado.
+
 ## Evitar conflito do Telegram
 
 Para eliminar `Conflict: terminated by other getUpdates request`, use webhook no Railway:
