@@ -139,6 +139,15 @@ def _has_market_family(available_markets: list[tuple[str, float | None]] | None,
     return any(market_family == family for market_family, _line in available_markets)
 
 
+def _has_market_line(available_markets: list[tuple[str, float | None]] | None, family: str, line: float) -> bool:
+    if available_markets is None:
+        return True
+    return any(
+        market_family == family and market_line is not None and abs(float(market_line) - line) <= 0.01
+        for market_family, market_line in available_markets
+    )
+
+
 def _effective_pressure(dangerous: float, attacks: float, total_shots: float, shots_on: float) -> tuple[float, str]:
     if dangerous > 0:
         return dangerous, f"ataques perigosos {dangerous:g}"
@@ -250,6 +259,28 @@ def _nil_nil_goal_window(minute: int, current_goals: int) -> tuple[str, int, flo
     if 58 <= minute <= 82:
         return "GOAL_OVER_05_FT", 90, 0.56
     return None
+
+
+def _bfbm_sparse_nil_nil_fallback(
+    *,
+    strategy_name: str,
+    available_markets: list[tuple[str, float | None]] | None,
+    attacks: float,
+    total_shots: float,
+    corners: float,
+    pressure: float,
+) -> bool:
+    if available_markets is None:
+        return False
+    if strategy_name == "GOAL_OVER_05_HT":
+        if not _has_market_line(available_markets, "first_half_goals", 0.5):
+            return False
+        return corners >= 1 or total_shots >= 2 or attacks >= 20 or pressure >= 10
+    if strategy_name == "GOAL_OVER_05_FT":
+        if not _has_market_line(available_markets, "goals", 0.5):
+            return False
+        return corners >= 2 or total_shots >= 4 or attacks >= 40 or pressure >= 20
+    return False
 
 
 def _next_corner_conviction(
@@ -421,19 +452,31 @@ def evaluate_game(
             pressure=pressure,
         )
         nil_nil_confidence = max(min_confidence, 84)
-        if total_shots < 9 or shots_on < 3 or pressure < 50:
+        strong_live_flow = total_shots >= 9 and shots_on >= 3 and pressure >= 50
+        bfbm_sparse_fallback = _bfbm_sparse_nil_nil_fallback(
+            strategy_name=strategy_name,
+            available_markets=available_markets,
+            attacks=attacks,
+            total_shots=total_shots,
+            corners=corners,
+            pressure=pressure,
+        )
+        if not strong_live_flow and not bfbm_sparse_fallback:
             conviction = 0
+        elif bfbm_sparse_fallback and conviction < nil_nil_confidence:
+            conviction = nil_nil_confidence
         if prob >= threshold and conviction >= nil_nil_confidence:
+            data_label = "estatisticas fortes" if strong_live_flow else "mercado BFBM confirmado com leitura parcial"
             candidates.append(
                 DeterministicSignal(
                     True,
-                    "goals",
+                    "first_half_goals" if strategy_name == "GOAL_OVER_05_HT" else "goals",
                     "over",
                     0.5,
                     prob,
                     conviction,
                     conviction,
-                    f"Jogo 0x0 com probabilidade {prob:.0%} de sair o primeiro gol ate {'o intervalo' if end_minute == 45 else 'o fim'}; conviccao {conviction} por chutes {total_shots:g}, no gol {shots_on:g}, escanteios {corners:g} e {pressure_label}.",
+                    f"Jogo 0x0 com probabilidade {prob:.0%} de sair o primeiro gol ate {'o intervalo' if end_minute == 45 else 'o fim'}; conviccao {conviction} por {data_label}, chutes {total_shots:g}, no gol {shots_on:g}, escanteios {corners:g} e {pressure_label}.",
                     strategy_name,
                 )
             )

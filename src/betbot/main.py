@@ -476,8 +476,6 @@ async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, stora
                 }
             )
         stats = compact_totalcorner_statistics(match)
-        if not has_actionable_stats(stats):
-            continue
         match_id = str(match.get("id") or match.get("mid") or index)
         snapshots.append(
             GameSnapshot(
@@ -1439,10 +1437,10 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     logger.warning("Odds multi falhou com HTTP %s; usando fallback individual.", exc.response.status_code)
 
         for game in snapshots:
-            if not has_actionable_stats(game.stats):
+            bfbm_source = str(game.event_id or "").startswith("tc-bfbm-")
+            if not bfbm_source and not has_actionable_stats(game.stats):
                 logger.info("Sem estatisticas suficientes para %s x %s.", game.home, game.away)
                 continue
-            bfbm_source = str(game.event_id or "").startswith("tc-bfbm-")
             bfbm_catalog_rows = storage.bfbm_markets(15) if bfbm_source else []
             bfbm_available_markets = (
                 bfbm_available_market_specs(bfbm_catalog_rows, f"{game.home} x {game.away}")
