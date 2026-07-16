@@ -69,13 +69,17 @@ def _available_lines(
 ) -> list[float]:
     if available_markets is None:
         return list(fallback)
-    return sorted(
+    lines = sorted(
         {
             float(line)
             for market_family, line in available_markets
             if market_family == family and line is not None
         }
     )
+    generic_line_market = any(market_family == family and line is None for market_family, line in available_markets)
+    if generic_line_market and family in {"goals", "corners"}:
+        return sorted({*lines, *fallback})
+    return lines
 
 
 def _goal_over_threshold(minute: int, needed_goals: int) -> float:
@@ -142,6 +146,8 @@ def _has_market_family(available_markets: list[tuple[str, float | None]] | None,
 def _has_market_line(available_markets: list[tuple[str, float | None]] | None, family: str, line: float) -> bool:
     if available_markets is None:
         return True
+    if any(market_family == family and market_line is None for market_family, market_line in available_markets):
+        return family in {"goals", "corners"}
     return any(
         market_family == family and market_line is not None and abs(float(market_line) - line) <= 0.01
         for market_family, market_line in available_markets
@@ -403,8 +409,10 @@ def _candidate_is_available(signal: DeterministicSignal, available_markets: list
     for family, line in available_markets:
         if family != signal.market_family:
             continue
-        if line is None or signal.line is None:
-            return line == signal.line
+        if line is None:
+            return signal.line is None or family in {"goals", "corners"}
+        if signal.line is None:
+            return False
         if abs(line - signal.line) <= 0.01:
             return True
     return False

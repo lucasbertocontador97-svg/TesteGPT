@@ -1582,8 +1582,17 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 )
             if storage.seen_alert(decision.alert_key):
                 logger.info("Entrada repetida ignorada: %s", decision.alert_key)
+                if bfbm_source:
+                    _record_bfbm_candidate_audit(
+                        storage,
+                        game,
+                        math_signal,
+                        status="SKIPPED",
+                        reason="post_candidate_duplicate_alert_key",
+                        bfbm_market=bfbm_market,
+                    )
                 continue
-            if storage.seen_recent_game_alert(game, settings.game_cooldown_minutes):
+            if not bfbm_source and storage.seen_recent_game_alert(game, settings.game_cooldown_minutes):
                 logger.info(
                     "Entrada ignorada por cooldown de %s min no jogo %s x %s.",
                     settings.game_cooldown_minutes,
@@ -1600,6 +1609,15 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     decision.selection,
                     decision.line,
                 )
+                if bfbm_source:
+                    _record_bfbm_candidate_audit(
+                        storage,
+                        game,
+                        math_signal,
+                        status="SKIPPED",
+                        reason="post_candidate_similar_alert",
+                        bfbm_market=bfbm_market,
+                    )
                 continue
             if decision.odd > 0:
                 alert_id = storage.save_alert(game, decision)
@@ -1607,6 +1625,15 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 alert_id = storage.save_manual_alert(game, decision)
             if alert_id is None:
                 logger.info("Entrada repetida ignorada apos insert: %s", decision.alert_key)
+                if bfbm_source:
+                    _record_bfbm_candidate_audit(
+                        storage,
+                        game,
+                        math_signal,
+                        status="SKIPPED",
+                        reason="post_candidate_insert_duplicate",
+                        bfbm_market=bfbm_market,
+                    )
                 continue
             message = format_alert(game, decision)
             if settings.bfbm_export:
