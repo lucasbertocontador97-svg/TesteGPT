@@ -1237,6 +1237,9 @@ async def load_totalcorner_live(settings, http: HttpJsonClient, limit: int | Non
     except httpx.HTTPStatusError as exc:
         logger.warning("TotalCorner live matches falhou com HTTP %s.", exc.response.status_code)
         return []
+    except Exception as exc:
+        logger.warning("TotalCorner live matches falhou: %s", exc)
+        return []
 
 
 async def load_totalcorner_today(settings, http: HttpJsonClient) -> list[dict]:
@@ -1251,6 +1254,9 @@ async def load_totalcorner_today(settings, http: HttpJsonClient) -> list[dict]:
         ]
     except httpx.HTTPStatusError as exc:
         logger.warning("TotalCorner today matches falhou com HTTP %s.", exc.response.status_code)
+        return []
+    except Exception as exc:
+        logger.warning("TotalCorner today matches falhou: %s", exc)
         return []
 
 

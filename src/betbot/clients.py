@@ -257,6 +257,8 @@ class TotalCornerClient:
     # requested. dangerousAttacks was verified to keep the full in-play list and
     # gives the motor a useful pressure signal beyond score/corners.
     live_columns = "dangerousAttacks"
+    live_cache_ttl_seconds = 45
+    live_stale_ttl_seconds = 600
     _inplay_cache: list[dict[str, Any]] = []
     _inplay_cache_ts: float = 0.0
 
@@ -277,7 +279,27 @@ class TotalCornerClient:
         items = data.get("data", [])
         return items if isinstance(items, list) else []
 
+    @classmethod
+    def _cache_age(cls) -> float:
+        return time.time() - cls._inplay_cache_ts if cls._inplay_cache_ts else 10**9
+
+    @classmethod
+    def _cached_items(cls, limit: int, *, max_age: int | None = None) -> list[dict[str, Any]]:
+        ttl = max_age if max_age is not None else cls.live_cache_ttl_seconds
+        if cls._inplay_cache and cls._cache_age() <= ttl:
+            return cls._inplay_cache[:limit]
+        return []
+
+    @staticmethod
+    def _looks_rate_limited(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "rate limit" in text or "too many" in text or "429" in text
+
     async def today_inplay(self, limit: int = 100) -> list[dict[str, Any]]:
+        cached = self._cached_items(limit)
+        if cached:
+            return cached
+
         try:
             enriched_data = await self.http.get_json(
                 f"{self.base_url}/match/today",
@@ -290,6 +312,10 @@ class TotalCornerClient:
                 return enriched_items[:limit]
         except Exception as exc:
             logger.warning("TotalCorner enriched in-play failed; falling back to basic feed: %s", exc)
+            stale = self._cached_items(limit, max_age=self.live_stale_ttl_seconds)
+            if stale and self._looks_rate_limited(exc):
+                logger.warning("TotalCorner rate-limited; using %.0fs stale cache.", self._cache_age())
+                return stale
             await asyncio.sleep(3)
         try:
             basic_data = await self.http.get_json(
@@ -302,8 +328,8 @@ class TotalCornerClient:
                 self.__class__._inplay_cache_ts = time.time()
             return basic_items[:limit]
         except Exception as exc:
-            cache_age = time.time() - self.__class__._inplay_cache_ts
-            if self.__class__._inplay_cache and cache_age <= 120:
+            cache_age = self._cache_age()
+            if self.__class__._inplay_cache and cache_age <= self.live_stale_ttl_seconds:
                 logger.warning("TotalCorner basic in-play failed; using %.0fs cache: %s", cache_age, exc)
                 return self.__class__._inplay_cache[:limit]
             raise
