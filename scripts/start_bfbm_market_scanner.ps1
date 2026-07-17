@@ -32,8 +32,16 @@ function Get-LatestCsv([string[]] $Patterns, [string] $FallbackPath) {
 }
 
 $ExportPath = Get-LatestCsv @("EXPORTAR DADOS VISIVEIS*.csv", "EXPORTAR DADOS VISÍVEIS*.csv") (Join-Path $MarketFolder "EXPORTAR DADOS VISIVEIS.csv")
-$MarketExportPath = Get-LatestCsv @("EXPORTAR MERCADOS*.csv") (Join-Path $MarketFolder "EXPORTAR MERCADOS.csv")
-$PostUrl = "https://testegpt-production.up.railway.app/bfbm/markets/snapshot?token=xBW42VXUy3h5Xhx3mSQeX83CuZ4-BldH"
+$MarketExportPath = Get-LatestCsv @("EX1*.csv", "EXPORTAR MERCADOS*.csv") (Join-Path $MarketFolder "EXPORTAR MERCADOS.csv")
+$RailwayBase = $env:TESTEGPT_RAILWAY_BASE
+if (-not $RailwayBase) {
+    $RailwayBase = "https://testegpt-production.up.railway.app"
+}
+$Token = $env:BFBM_TOKEN
+if (-not $Token) {
+    throw "Configure BFBM_TOKEN no ambiente antes de iniciar o scanner de mercados."
+}
+$PostUrl = "$RailwayBase/bfbm/markets/snapshot?token=$Token"
 
 Write-Host "BFBM scanner usando dados visiveis: $ExportPath"
 Write-Host "BFBM scanner usando catalogo: $MarketExportPath"

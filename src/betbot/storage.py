@@ -169,7 +169,21 @@ class Storage:
             if column not in market_columns:
                 self.conn.execute(f"alter table bfbm_markets add column {column} {ddl_type}")
         bet_columns = {row["name"] for row in self.conn.execute("pragma table_info(bfbm_bet_notifications)").fetchall()}
-        for column, ddl_type in (("placed_at", "text"), ("placed_at_iso", "text"), ("sid", "text")):
+        for column, ddl_type in (
+            ("placed_at", "text"),
+            ("placed_at_iso", "text"),
+            ("sid", "text"),
+            ("alert_id", "integer"),
+            ("market_id", "text"),
+            ("selection_id", "text"),
+            ("handicap", "text"),
+            ("side", "text"),
+            ("order_status", "text"),
+            ("price", "real"),
+            ("profit", "real"),
+            ("settled_at", "text"),
+            ("raw_json", "text"),
+        ):
             if column not in bet_columns:
                 self.conn.execute(f"alter table bfbm_bet_notifications add column {column} {ddl_type}")
         self.conn.commit()
@@ -336,8 +350,10 @@ class Storage:
         self.conn.execute(
             """
             insert into bfbm_bet_notifications (
-                placed_at, placed_at_iso, bet_id, size_matched, success, strategy, sid, raw_line
-            ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                placed_at, placed_at_iso, bet_id, size_matched, success, strategy, sid, raw_line,
+                alert_id, market_id, selection_id, handicap, side, order_status, price, profit,
+                settled_at, raw_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(bet_id) do update set
                 placed_at = coalesce(nullif(excluded.placed_at, ''), placed_at),
                 placed_at_iso = coalesce(nullif(excluded.placed_at_iso, ''), placed_at_iso),
@@ -345,7 +361,17 @@ class Storage:
                 success = coalesce(nullif(excluded.success, ''), success),
                 strategy = coalesce(nullif(excluded.strategy, ''), strategy),
                 sid = coalesce(nullif(excluded.sid, ''), sid),
-                raw_line = coalesce(nullif(excluded.raw_line, ''), raw_line)
+                raw_line = coalesce(nullif(excluded.raw_line, ''), raw_line),
+                alert_id = coalesce(excluded.alert_id, alert_id),
+                market_id = coalesce(nullif(excluded.market_id, ''), market_id),
+                selection_id = coalesce(nullif(excluded.selection_id, ''), selection_id),
+                handicap = coalesce(nullif(excluded.handicap, ''), handicap),
+                side = coalesce(nullif(excluded.side, ''), side),
+                order_status = coalesce(nullif(excluded.order_status, ''), order_status),
+                price = coalesce(excluded.price, price),
+                profit = coalesce(excluded.profit, profit),
+                settled_at = coalesce(nullif(excluded.settled_at, ''), settled_at),
+                raw_json = coalesce(nullif(excluded.raw_json, ''), raw_json)
             """,
             (
                 str(item.get("placed_at") or ""),
@@ -356,9 +382,53 @@ class Storage:
                 str(item.get("strategy") or ""),
                 str(item.get("sid") or ""),
                 str(item.get("line") or ""),
+                item.get("alert_id"),
+                str(item.get("market_id") or ""),
+                str(item.get("selection_id") or ""),
+                str(item.get("handicap") or ""),
+                str(item.get("side") or ""),
+                str(item.get("order_status") or item.get("status") or ""),
+                item.get("price"),
+                item.get("profit"),
+                str(item.get("settled_at") or ""),
+                json.dumps(item.get("raw", {}), ensure_ascii=False) if item.get("raw") is not None else "",
             ),
         )
         self.conn.commit()
+
+    def find_alert_by_bfbm_order(self, market_id: str, selection_id: str) -> dict[str, Any] | None:
+        market_id = str(market_id or "").strip()
+        selection_id = str(selection_id or "").strip()
+        if not market_id or market_id == "0" or not selection_id or selection_id == "0":
+            return None
+        row = self.conn.execute(
+            """
+            select *
+            from alerts
+            where betfair_market_id = ?
+              and betfair_selection_id = ?
+              and user_action != 'IGNORED'
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (market_id, selection_id),
+        ).fetchone()
+        if row:
+            return dict(row)
+        row = self.conn.execute(
+            """
+            select a.*
+            from bfbm_export_audit e
+            join alerts a on a.id = e.alert_id
+            where e.bfbm_market_id = ?
+              and e.bfbm_selection_id = ?
+              and a.user_action != 'IGNORED'
+            order by e.last_seen_at desc, e.id desc
+            limit 1
+            """,
+            (market_id, selection_id),
+        ).fetchone()
+        return dict(row) if row else None
 
     def replace_bfbm_markets(self, rows: list[dict[str, Any]]) -> int:
         self.conn.execute("delete from bfbm_markets")

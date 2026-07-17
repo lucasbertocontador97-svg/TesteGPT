@@ -3,3 +3,4 @@ python-dotenv==1.0.1
 python-telegram-bot[job-queue,webhooks]==21.6
 openai==1.51.2
 pydantic==2.9.2
+requests==2.34.2

@@ -545,6 +545,16 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _check_bfbm_sync_token(self, settings) -> bool:
+        if not settings.bfbm_sync_token:
+            self.send_error(503, "BFBM_SYNC_TOKEN not configured")
+            return False
+        provided = self.headers.get("X-Sync-Token", "").strip()
+        if not hmac.compare_digest(provided, settings.bfbm_sync_token):
+            self.send_error(401)
+            return False
+        return True
+
     def _check_betfair_cache_key(self, settings) -> bool:
         if not settings.betfair_cache_api_key:
             self.send_error(503, "BETFAIR_CACHE_API_KEY not configured")
@@ -555,9 +565,161 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _write_json_response(self, status: int, data: dict) -> None:
+        body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    @staticmethod
+    def _order_rows_from_sync_payload(payload: dict) -> list[tuple[str, dict]]:
+        rows: list[tuple[str, dict]] = []
+        for label in ("current", "cleared"):
+            section = payload.get(label)
+            if isinstance(section, dict):
+                section_rows = section.get("rows") or []
+            elif isinstance(section, list):
+                section_rows = section
+            else:
+                section_rows = []
+            for row in section_rows:
+                if isinstance(row, dict):
+                    rows.append((label, row))
+        if not rows and isinstance(payload.get("rows"), list):
+            rows.extend(("rows", row) for row in payload["rows"] if isinstance(row, dict))
+        return rows
+
+    @staticmethod
+    def _float_or_none(value) -> float | None:
+        if value is None or value == "":
+            return None
+        try:
+            return float(str(value).replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+
+    def _sync_bfbm_orders(self, payload: dict) -> dict:
+        order_rows = self._order_rows_from_sync_payload(payload)
+        storage = Storage(load_settings().database_path)
+        total_rows = matched = marked = settled = unmatched = 0
+        unmatched_samples: list[dict[str, str]] = []
+        try:
+            for source, row in order_rows:
+                total_rows += 1
+                bet_id = str(row.get("betId") or row.get("bet_id") or "").strip()
+                market_id = str(row.get("marketId") or row.get("market_id") or "").strip()
+                selection_id = str(row.get("selectionId") or row.get("selection_id") or "").strip()
+                if not market_id or not selection_id:
+                    unmatched += 1
+                    if len(unmatched_samples) < 5:
+                        unmatched_samples.append({"betId": bet_id, "reason": "missing_market_or_selection_id"})
+                    continue
+
+                alert = storage.find_alert_by_bfbm_order(market_id, selection_id)
+                alert_id = int(alert["id"]) if alert else None
+                if alert_id:
+                    matched += 1
+                else:
+                    unmatched += 1
+                    if len(unmatched_samples) < 5:
+                        unmatched_samples.append(
+                            {
+                                "betId": bet_id,
+                                "marketId": market_id,
+                                "selectionId": selection_id,
+                                "reason": "no_matching_tip",
+                            }
+                        )
+
+                placed_at = str(row.get("placedDate") or row.get("placed_at") or "").strip()
+                settled_at = str(row.get("settledDate") or row.get("settled_at") or "").strip()
+                size = self._float_or_none(row.get("size") or row.get("sizeMatched") or row.get("size_matched"))
+                price = self._float_or_none(row.get("price") or row.get("priceMatched") or row.get("averagePriceMatched"))
+                profit = self._float_or_none(row.get("profit"))
+                order_status = str(row.get("status") or row.get("orderStatus") or "").strip()
+                side = str(row.get("side") or "").strip()
+
+                storage.record_bfbm_bet_notification(
+                    {
+                        "bet_id": bet_id,
+                        "placed_at": placed_at,
+                        "placed_at_iso": placed_at,
+                        "size_matched": "" if size is None else str(size),
+                        "success": "SYNCED",
+                        "strategy": str(row.get("strategy") or ""),
+                        "sid": str(row.get("customerStrategyRef") or row.get("customerOrderRef") or ""),
+                        "line": f"{source}:{order_status}",
+                        "alert_id": alert_id,
+                        "market_id": market_id,
+                        "selection_id": selection_id,
+                        "handicap": str(row.get("handicap") or ""),
+                        "side": side,
+                        "order_status": order_status,
+                        "price": price,
+                        "profit": profit,
+                        "settled_at": settled_at,
+                        "raw": row,
+                    }
+                )
+
+                if alert_id and bet_id:
+                    if storage.mark_bfbm_bet(alert_id, bet_id, placed_at):
+                        marked += 1
+
+                is_settled = source == "cleared" or bool(settled_at) or order_status.upper() == "SETTLED"
+                if alert_id and is_settled and profit is not None:
+                    if profit > 0:
+                        result_status = "WON"
+                    elif profit < 0:
+                        result_status = "LOST"
+                    else:
+                        result_status = "PUSH"
+                    note = (
+                        f"BFBM sync: bet_id={bet_id or '-'}; market_id={market_id}; "
+                        f"selection_id={selection_id}; side={side or '-'}; price={price}; "
+                        f"stake={size}; profit={profit}; settled_at={settled_at or '-'}"
+                    )
+                    storage.settle_alert(alert_id, result_status, note)
+                    settled += 1
+        finally:
+            storage.close()
+        return {
+            "ok": True,
+            "total_rows": total_rows,
+            "matched": matched,
+            "marked_bets": marked,
+            "settled": settled,
+            "unmatched": unmatched,
+            "unmatched_samples": unmatched_samples,
+            "reconciled": matched > 0 or total_rows == 0,
+        }
+
     def do_POST(self) -> None:
         settings = load_settings()
         parsed = urlparse(self.path)
+        if parsed.path == "/api/bfbm/sync-orders":
+            if not self._check_bfbm_sync_token(settings):
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                if length > 5_000_000:
+                    self.send_error(413, "orders payload too large")
+                    return
+                raw = self.rfile.read(length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+                if not isinstance(payload, dict):
+                    self.send_error(400, "expected JSON object")
+                    return
+                self._write_json_response(200, self._sync_bfbm_orders(payload))
+            except json.JSONDecodeError:
+                self.send_error(400, "invalid JSON")
+            except Exception as exc:
+                logger.exception("Erro ao sincronizar ordens BFBM")
+                self._write_json_response(500, {"ok": False, "error": type(exc).__name__})
+            return
         if parsed.path != "/bfbm/markets/snapshot":
             self.send_error(404)
             return

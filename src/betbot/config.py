@@ -41,6 +41,7 @@ class Settings:
     bfbm_export: bool
     bfbm_provider: str
     bfbm_token: str | None
+    bfbm_sync_token: str | None
     bfbm_stake: float
     bfbm_min_price: float
     bfbm_max_price: float
@@ -94,6 +95,7 @@ def load_settings() -> Settings:
         bfbm_export=os.getenv("BFBM_EXPORT", "false").lower() in {"1", "true", "yes", "sim"},
         bfbm_provider=os.getenv("BFBM_PROVIDER", "TesteGPT"),
         bfbm_token=os.getenv("BFBM_TOKEN") or None,
+        bfbm_sync_token=os.getenv("BFBM_SYNC_TOKEN") or None,
         bfbm_stake=float(os.getenv("BFBM_STAKE", "0.58")),
         bfbm_min_price=float(os.getenv("BFBM_MIN_PRICE", "1.80")),
         bfbm_max_price=float(os.getenv("BFBM_MAX_PRICE", "8.00")),

@@ -30,8 +30,11 @@ def main() -> int:
     except Exception as exc:
         raise SystemExit(f"requests is required: {type(exc).__name__}: {exc}") from exc
 
+    login_url = os.getenv("BETFAIR_CERT_LOGIN_URL", "https://identitysso-cert.betfair.bet.br/api/certlogin")
+    betting_url = os.getenv("BETFAIR_BETTING_API_URL", "https://api.betfair.bet.br/exchange/betting/json-rpc/v1")
+
     response = requests.post(
-        "https://identitysso-cert.betfair.com/api/certlogin",
+        login_url,
         data={"username": username, "password": password},
         headers={
             "X-Application": app_key,
@@ -70,7 +73,7 @@ def main() -> int:
         "id": 1,
     }
     markets = requests.post(
-        "https://api.betfair.com/exchange/betting/json-rpc/v1",
+        betting_url,
         json=body,
         headers={
             "X-Application": app_key,

@@ -1,14 +1,37 @@
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$Python = "$env:USERPROFILE\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+$Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $Python)) {
+    $Python = "$env:USERPROFILE\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+}
 if (-not (Test-Path -LiteralPath $Python)) {
     $Python = "python"
 }
 
-$SourceUrl = "https://testegpt-production.up.railway.app/bfbm/live-full.csv?token=xBW42VXUy3h5Xhx3mSQeX83CuZ4-BldH"
-$NotifyUrl = "https://testegpt-production.up.railway.app/bfbm/notify-bet?token=xBW42VXUy3h5Xhx3mSQeX83CuZ4-BldH"
+$RailwayBase = $env:TESTEGPT_RAILWAY_BASE
+if (-not $RailwayBase) {
+    $RailwayBase = "https://testegpt-production.up.railway.app"
+}
+$RailwayToken = $env:BFBM_TOKEN
+$BridgeApiToken = $env:BFBM_BRIDGE_API_TOKEN
+if (-not $RailwayToken) {
+    throw "Configure BFBM_TOKEN no ambiente antes de iniciar a ponte."
+}
+if (-not $BridgeApiToken) {
+    $BridgeApiToken = $RailwayToken
+}
+$SourceUrl = "$RailwayBase/bfbm/live-full.csv?token=$RailwayToken"
+$NotifyUrl = "$RailwayBase/bfbm/notify-bet?token=$RailwayToken"
+$ResultNotifyUrl = "$RailwayBase/bfbm/notify-bet-result?token=$RailwayToken"
 $Bridge = Join-Path $RepoRoot "scripts\bfbm_bridge.py"
+
+if (-not $env:BETFAIR_CERT_PATH) {
+    $env:BETFAIR_CERT_PATH = "C:\BetfairCert\client-2048.crt"
+}
+if (-not $env:BETFAIR_KEY_PATH) {
+    $env:BETFAIR_KEY_PATH = "C:\BetfairCert\client-2048.key"
+}
 
 & $Python $Bridge `
     --host "127.0.0.1" `
@@ -16,8 +39,10 @@ $Bridge = Join-Path $RepoRoot "scripts\bfbm_bridge.py"
     --source-url $SourceUrl `
     --source-poll-seconds 20 `
     --notify-url $NotifyUrl `
-    --notify-sid-filter "CODEX-TESTEGPT" `
+    --result-notify-url $ResultNotifyUrl `
+    --orders-poll-seconds 60 `
+    --api-token $BridgeApiToken `
     --min-price 1.80 `
     --max-price 100.00 `
-    --max-tips 1 `
+    --max-tips 12 `
     --tip-keep-seconds 600
