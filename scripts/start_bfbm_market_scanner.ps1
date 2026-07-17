@@ -1,5 +1,19 @@
 $ErrorActionPreference = "Stop"
 
+function Use-UserEnv([string] $Name) {
+    if (-not [Environment]::GetEnvironmentVariable($Name, "Process")) {
+        $value = [Environment]::GetEnvironmentVariable($Name, "User")
+        if ($value) {
+            [Environment]::SetEnvironmentVariable($Name, $value, "Process")
+        }
+    }
+}
+
+@(
+    "BFBM_TOKEN",
+    "TESTEGPT_RAILWAY_BASE"
+) | ForEach-Object { Use-UserEnv $_ }
+
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $Python = "$env:USERPROFILE\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
 if (-not (Test-Path -LiteralPath $Python)) {

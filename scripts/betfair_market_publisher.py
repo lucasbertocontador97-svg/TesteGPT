@@ -13,7 +13,13 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from betbot.betfair import BetfairClient, catalogue_payload, credentials_from_env, enrich_catalogue_with_books  # noqa: E402
+from betbot.betfair import (  # noqa: E402
+    BetfairAuthError,
+    BetfairClient,
+    catalogue_payload,
+    credentials_from_env,
+    enrich_catalogue_with_books,
+)
 
 
 MARKET_TYPE_GROUPS = [
@@ -39,9 +45,7 @@ def post_json(url: str, payload: dict, timeout: int = 20) -> str:
         return response.read().decode("utf-8", errors="replace")
 
 
-def publish_once(post_url: str, hours_ahead: int, max_results: int) -> tuple[int, int, str]:
-    client = BetfairClient(credentials_from_env())
-    client.login()
+def publish_once(client: BetfairClient, post_url: str, hours_ahead: int, max_results: int) -> tuple[int, int, str]:
     catalogue = []
     seen_market_ids: set[str] = set()
     for offset, market_type_codes in enumerate(MARKET_TYPE_GROUPS):
@@ -77,21 +81,32 @@ def main() -> int:
     parser.add_argument("--hours-ahead", type=int, default=48)
     parser.add_argument("--max-results", type=int, default=1000)
     parser.add_argument("--poll-seconds", type=int, default=60)
+    parser.add_argument("--auth-error-cooldown-seconds", type=int, default=3600)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
 
+    client = BetfairClient(credentials_from_env())
     while True:
         try:
-            count, live_count, priced_count, result = publish_once(args.post_url, args.hours_ahead, args.max_results)
+            count, live_count, priced_count, result = publish_once(client, args.post_url, args.hours_ahead, args.max_results)
             print(f"[betfair] markets={count} inplay_or_capable={live_count} priced_runners={priced_count} envio={result}", flush=True)
             if args.once:
                 return 0
             time.sleep(max(15, args.poll_seconds))
+        except BetfairAuthError as exc:
+            print(
+                f"[betfair] erro_auth={exc}. Pausando por {max(300, args.auth_error_cooldown_seconds)}s para evitar excesso de logins.",
+                flush=True,
+            )
+            client = BetfairClient(credentials_from_env())
+            if args.once:
+                return 1
+            time.sleep(max(300, args.auth_error_cooldown_seconds))
         except Exception as exc:
             print(f"[betfair] erro={type(exc).__name__}: {exc}", flush=True)
             if args.once:
                 return 1
-            time.sleep(max(15, min(120, args.poll_seconds)))
+            time.sleep(max(60, min(300, args.poll_seconds)))
 
 
 if __name__ == "__main__":

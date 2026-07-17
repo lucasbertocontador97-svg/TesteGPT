@@ -12,6 +12,10 @@ import requests
 from .bfbm_markets import BfbmMarket, markets_to_payload
 
 
+class BetfairAuthError(RuntimeError):
+    """Erro de autenticacao que nao deve ser retentado em loop curto."""
+
+
 @dataclass(frozen=True)
 class BetfairCredentials:
     username: str
@@ -66,7 +70,7 @@ class BetfairClient:
         response.raise_for_status()
         payload = response.json()
         if payload.get("loginStatus") != "SUCCESS":
-            raise RuntimeError(f"Betfair loginStatus={payload.get('loginStatus')}")
+            raise BetfairAuthError(f"Betfair loginStatus={payload.get('loginStatus')}")
         self.session_token = str(payload["sessionToken"])
         return self.session_token
 
@@ -86,17 +90,23 @@ class BetfairClient:
             "params": params,
             "id": request_id,
         }
-        response = requests.post(
-            self.credentials.betting_url,
-            json=body,
-            headers=self._headers(),
-            timeout=30,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if "error" in payload:
-            raise RuntimeError(json.dumps(payload["error"], ensure_ascii=False))
-        return payload.get("result")
+        for attempt in range(2):
+            response = requests.post(
+                self.credentials.betting_url,
+                json=body,
+                headers=self._headers(),
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if "error" not in payload:
+                return payload.get("result")
+            error_text = json.dumps(payload["error"], ensure_ascii=False)
+            if attempt == 0 and ("INVALID_SESSION_INFORMATION" in error_text or "NO_SESSION" in error_text):
+                self.session_token = ""
+                continue
+            raise RuntimeError(error_text)
+        return None
 
     def football_market_catalogue(
         self,

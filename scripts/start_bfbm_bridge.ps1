@@ -1,5 +1,25 @@
 $ErrorActionPreference = "Stop"
 
+function Use-UserEnv([string] $Name) {
+    if (-not [Environment]::GetEnvironmentVariable($Name, "Process")) {
+        $value = [Environment]::GetEnvironmentVariable($Name, "User")
+        if ($value) {
+            [Environment]::SetEnvironmentVariable($Name, $value, "Process")
+        }
+    }
+}
+
+@(
+    "BFBM_TOKEN",
+    "BFBM_BRIDGE_API_TOKEN",
+    "TESTEGPT_RAILWAY_BASE",
+    "BETFAIR_USERNAME",
+    "BETFAIR_PASSWORD",
+    "BETFAIR_APP_KEY",
+    "BETFAIR_CERT_PATH",
+    "BETFAIR_KEY_PATH"
+) | ForEach-Object { Use-UserEnv $_ }
+
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $Python)) {
@@ -40,7 +60,7 @@ if (-not $env:BETFAIR_KEY_PATH) {
     --source-poll-seconds 20 `
     --notify-url $NotifyUrl `
     --result-notify-url $ResultNotifyUrl `
-    --orders-poll-seconds 60 `
+    --orders-poll-seconds 180 `
     --api-token $BridgeApiToken `
     --min-price 1.80 `
     --max-price 100.00 `

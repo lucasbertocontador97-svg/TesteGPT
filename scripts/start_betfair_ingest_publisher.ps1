@@ -24,4 +24,5 @@ if (-not $IngestToken) {
     --token $IngestToken `
     --hours-ahead 48 `
     --max-results 200 `
-    --poll-seconds 10
+    --poll-seconds 60 `
+    --auth-error-cooldown-seconds 3600

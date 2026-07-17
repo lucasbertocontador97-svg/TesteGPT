@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import csv
+import ctypes
 import json
+import os
 import re
 import sys
 import threading
@@ -19,6 +22,8 @@ from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
+
+_BETFAIR_ORDERS_CLIENT: Any | None = None
 
 RICH_COLUMNS = [
     "Provider",
@@ -39,6 +44,58 @@ RICH_COLUMNS = [
     "MaxPrice",
     "BSP",
 ]
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _acquire_singleton_lock(port: int) -> Path:
+    lock_dir = Path(os.getenv("LOCALAPPDATA") or Path.home())
+    lock_path = lock_dir / f"testegpt_bfbm_bridge_{port}.lock"
+    for _ in range(2):
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                existing_pid = int(lock_path.read_text(encoding="utf-8").strip() or "0")
+            except (OSError, ValueError):
+                existing_pid = 0
+            if existing_pid and _pid_is_running(existing_pid):
+                raise RuntimeError(
+                    f"Outra ponte BFBM ja esta ativa no PID {existing_pid}. "
+                    f"Feche essa instancia antes de iniciar outra."
+                )
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(str(os.getpid()))
+
+        def _cleanup_lock() -> None:
+            try:
+                if lock_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+                    lock_path.unlink()
+            except OSError:
+                pass
+
+        atexit.register(_cleanup_lock)
+        return lock_path
+    raise RuntimeError("Nao foi possivel criar a trava da ponte BFBM.")
 
 
 def _valid_betfair_id(value: str) -> bool:
@@ -200,9 +257,11 @@ def _query_betfair_orders(
     from dotenv import load_dotenv
     from betbot.betfair import BetfairClient, credentials_from_env
 
+    global _BETFAIR_ORDERS_CLIENT
     load_dotenv(REPO_ROOT / ".env")
-    client = BetfairClient(credentials_from_env())
-    client.login()
+    if _BETFAIR_ORDERS_CLIENT is None:
+        _BETFAIR_ORDERS_CLIENT = BetfairClient(credentials_from_env())
+    client = _BETFAIR_ORDERS_CLIENT
 
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=max(1, min(24 * 30, hours)))
@@ -230,10 +289,27 @@ def _query_betfair_orders(
     }
 
 
+def _is_betfair_auth_error(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}"
+    return any(
+        marker in text
+        for marker in (
+            "BetfairAuthError",
+            "Betfair loginStatus=",
+            "ACCOUNT_PENDING_PASSWORD_CHANGE",
+            "CERT_AUTH_REQUIRED",
+            "INVALID_USERNAME_OR_PASSWORD",
+            "INVALID_APP_KEY",
+            "SECURITY_RESTRICTED_LOCATION",
+        )
+    )
+
+
 def settlement_loop(state: BridgeState, notify_url: str | None, poll_seconds: int) -> None:
     if not notify_url:
         return
     seeded = bool(state.seen_result_bet_ids)
+    auth_cooldown_seconds = max(1800, poll_seconds * 30)
     while True:
         try:
             payload = _query_betfair_orders(hours=24 * 35, limit=1000)
@@ -318,6 +394,14 @@ def settlement_loop(state: BridgeState, notify_url: str | None, poll_seconds: in
                 except Exception as exc:  # noqa: BLE001
                     print(f"[settlement] erro ao enviar resumo: {type(exc).__name__}: {exc}")
         except Exception as exc:  # noqa: BLE001 - settlement monitor must keep running.
+            if _is_betfair_auth_error(exc):
+                global _BETFAIR_ORDERS_CLIENT
+                _BETFAIR_ORDERS_CLIENT = None
+                print(
+                    f"[settlement] erro_auth: {exc}. Pausando por {auth_cooldown_seconds}s para evitar excesso de logins."
+                )
+                time.sleep(auth_cooldown_seconds)
+                continue
             print(f"[settlement] erro: {type(exc).__name__}: {exc}")
         time.sleep(max(30, poll_seconds))
 
@@ -1058,6 +1142,13 @@ def main() -> None:
         default=str(Path.home() / "AppData/Local/TesteGPT/bfbm_bridge_state.json"),
     )
     args = parser.parse_args()
+
+    try:
+        lock_path = _acquire_singleton_lock(args.port)
+        print(f"Trava singleton ativa: {lock_path}")
+    except RuntimeError as exc:
+        print(f"[singleton] {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
 
     state = BridgeState(
         Path(args.state_path),

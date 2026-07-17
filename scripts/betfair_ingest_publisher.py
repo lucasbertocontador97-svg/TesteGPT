@@ -17,7 +17,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from betbot.betfair import BetfairClient, credentials_from_env  # noqa: E402
+from betbot.betfair import BetfairAuthError, BetfairClient, credentials_from_env  # noqa: E402
 
 
 def chunks(items: list[str], size: int) -> list[list[str]]:
@@ -195,11 +195,11 @@ def main() -> int:
     parser.add_argument("--hours-ahead", type=int, default=48)
     parser.add_argument("--max-results", type=int, default=200)
     parser.add_argument("--poll-seconds", type=int, default=10)
+    parser.add_argument("--auth-error-cooldown-seconds", type=int, default=3600)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
 
     client = BetfairClient(credentials_from_env())
-    client.login()
     while True:
         try:
             payload = fetch_payload(client, hours_ahead=args.hours_ahead, max_results=args.max_results)
@@ -224,11 +224,20 @@ def main() -> int:
             if args.once:
                 return 0
             time.sleep(max(5, args.poll_seconds))
+        except BetfairAuthError as exc:
+            print(
+                f"[ingest] erro_auth={exc}. Pausando por {max(300, args.auth_error_cooldown_seconds)}s para evitar excesso de logins.",
+                flush=True,
+            )
+            client = BetfairClient(credentials_from_env())
+            if args.once:
+                return 1
+            time.sleep(max(300, args.auth_error_cooldown_seconds))
         except Exception as exc:
             print(f"[ingest] erro={type(exc).__name__}: {exc}", flush=True)
             if args.once:
                 return 1
-            time.sleep(max(10, min(60, args.poll_seconds)))
+            time.sleep(max(60, min(300, args.poll_seconds)))
 
 
 if __name__ == "__main__":
