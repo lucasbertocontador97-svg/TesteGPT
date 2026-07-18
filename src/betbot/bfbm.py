@@ -419,12 +419,18 @@ def _selection_aliases_for_runner(row: dict[str, str], market: dict[str, Any]) -
         side_pt = "Menos" if is_under else "Mais"
         aliases.update(
             {
+                f"{side_en} {line_dot}",
+                f"{side_en} {line_comma}",
                 f"{side_en} {line_dot} Goals",
                 f"{side_en} {line_dot} goals",
+                f"{side_en} {line_dot} Goal",
+                f"{side_en} {line_dot} goal",
                 f"{side_pt} de {line_comma} Gols",
                 f"{side_pt} de {line_dot} Gols",
                 f"{side_pt} de {line_comma} gols",
                 f"{side_pt} de {line_dot} gols",
+                f"{side_pt} de {line_comma}",
+                f"{side_pt} de {line_dot}",
             }
         )
     if family == "corners" and line_dot:
@@ -432,12 +438,18 @@ def _selection_aliases_for_runner(row: dict[str, str], market: dict[str, Any]) -
         side_pt = "Menos" if is_under else "Mais"
         aliases.update(
             {
+                f"{side_en} {line_dot}",
+                f"{side_en} {line_comma}",
                 f"{side_en} {line_dot} Corners",
                 f"{side_en} {line_dot} corners",
+                f"Corners {side_en} {line_dot}",
+                f"Corner {side_en} {line_dot}",
                 f"{side_pt} de {line_comma} Escanteios",
                 f"{side_pt} de {line_dot} Escanteios",
                 f"{side_pt} de {line_comma} escanteios",
                 f"{side_pt} de {line_dot} escanteios",
+                f"{side_pt} de {line_comma}",
+                f"{side_pt} de {line_dot}",
             }
         )
     if family == "btts":

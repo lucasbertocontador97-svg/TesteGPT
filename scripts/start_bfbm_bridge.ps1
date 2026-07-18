@@ -46,7 +46,7 @@ if (-not $SyncToken) {
 if (-not $BridgeApiToken) {
     $BridgeApiToken = $RailwayToken
 }
-$SourceUrl = "$RailwayBase/bfbm/live-full.csv?token=$RailwayToken"
+$SourceUrl = "$RailwayBase/bfbm/live-full.csv?token=$RailwayToken&limit=100"
 $NotifyUrl = "$RailwayBase/bfbm/notify-bet?token=$RailwayToken"
 $ResultNotifyUrl = "$RailwayBase/bfbm/notify-bet-result?token=$RailwayToken"
 $SyncOrdersUrl = "$RailwayBase/api/bfbm/sync-orders"
@@ -72,5 +72,5 @@ if (-not $env:BETFAIR_KEY_PATH) {
     --api-token $BridgeApiToken `
     --min-price 1.80 `
     --max-price 100.00 `
-    --max-tips 12 `
-    --tip-keep-seconds 2700
+    --max-tips 100 `
+    --tip-keep-seconds 14400

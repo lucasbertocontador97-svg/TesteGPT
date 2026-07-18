@@ -1427,10 +1427,10 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         else:
             query = parse_qs(parsed.query)
             try:
-                tips_limit = int(query.get("limit", ["12"])[0])
+                tips_limit = int(query.get("limit", ["50"])[0])
             except ValueError:
-                tips_limit = 12
-            tips_limit = max(1, min(50, tips_limit))
+                tips_limit = 50
+            tips_limit = max(1, min(100, tips_limit))
             storage = Storage(settings.database_path)
             try:
                 alerts = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes, limit=tips_limit)

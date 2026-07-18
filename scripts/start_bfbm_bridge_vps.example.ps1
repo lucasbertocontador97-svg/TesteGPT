@@ -12,7 +12,7 @@ $RailwayToken = "PREENCHA_TOKEN_BFBM_DO_RAILWAY"
 $SyncToken = "PREENCHA_TOKEN_SYNC_BFBM_DO_RAILWAY"
 $RailwayBase = "https://testegpt-production.up.railway.app"
 
-$SourceUrl = "$RailwayBase/bfbm/live-full.csv?token=$RailwayToken"
+$SourceUrl = "$RailwayBase/bfbm/live-full.csv?token=$RailwayToken&limit=100"
 $NotifyUrl = "$RailwayBase/bfbm/notify-bet?token=$RailwayToken"
 $ResultNotifyUrl = "$RailwayBase/bfbm/notify-bet-result?token=$RailwayToken"
 $SyncOrdersUrl = "$RailwayBase/api/bfbm/sync-orders"
@@ -36,5 +36,5 @@ $env:BETFAIR_KEY_PATH = "C:\BetfairCert\client-2048.key"
     --api-token $BridgeApiToken `
     --min-price 1.80 `
     --max-price 100.00 `
-    --max-tips 12 `
-    --tip-keep-seconds 600
+    --max-tips 100 `
+    --tip-keep-seconds 14400
