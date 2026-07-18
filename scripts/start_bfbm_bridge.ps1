@@ -69,7 +69,8 @@ $BridgeArgs = @(
     "--min-price", "1.80",
     "--max-price", "100.00",
     "--max-tips", "100",
-    "--tip-keep-seconds", "14400"
+    "--tip-keep-seconds", "14400",
+    "--allow-missing-ids"
 )
 
 if ($SyncToken) {
