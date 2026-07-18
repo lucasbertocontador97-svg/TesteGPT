@@ -47,6 +47,7 @@ class Settings:
     bfbm_max_price: float
     bfbm_max_tip_age_minutes: int
     betfair_cache_api_key: str | None
+    results_api_key: str | None
 
 
 def load_settings() -> Settings:
@@ -101,6 +102,7 @@ def load_settings() -> Settings:
         bfbm_max_price=float(os.getenv("BFBM_MAX_PRICE", "8.00")),
         bfbm_max_tip_age_minutes=max(1, int(os.getenv("BFBM_MAX_TIP_AGE_MINUTES", "8"))),
         betfair_cache_api_key=os.getenv("BETFAIR_CACHE_API_KEY") or None,
+        results_api_key=os.getenv("RESULTS_API_KEY") or None,
     )
 
 
@@ -175,5 +177,6 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
         "BFBM_EXPORT": settings.bfbm_export,
         "BFBM_TOKEN": bool(settings.bfbm_token),
         "BETFAIR_CACHE_API_KEY": bool(settings.betfair_cache_api_key),
+        "RESULTS_API_KEY": bool(settings.results_api_key),
         "DATABASE_PERSISTENT": bool(db_status["persistent"]),
     }

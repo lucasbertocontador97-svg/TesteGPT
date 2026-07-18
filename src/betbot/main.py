@@ -9,6 +9,7 @@ import threading
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 import httpx
 from telegram import Update
@@ -565,6 +566,29 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _check_results_api_key(self, settings, parsed) -> bool:
+        if not settings.results_api_key:
+            self.send_error(503, "RESULTS_API_KEY not configured")
+            return False
+        query = parse_qs(parsed.query)
+        provided = (
+            self.headers.get("X-Api-Key", "").strip()
+            or self.headers.get("X-Results-Key", "").strip()
+            or query.get("api_key", [""])[0].strip()
+            or query.get("token", [""])[0].strip()
+        )
+        if not hmac.compare_digest(provided, settings.results_api_key):
+            self.send_error(401)
+            return False
+        return True
+
+    @staticmethod
+    def _sao_paulo_now() -> datetime:
+        try:
+            return datetime.now(ZoneInfo("America/Sao_Paulo"))
+        except Exception:
+            return datetime.utcnow()
+
     def _write_json_response(self, status: int, data: dict) -> None:
         body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
@@ -783,6 +807,11 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/notify-bet",
             "/bfbm/notify-bet-result",
             "/api/betfair/cache",
+            "/api/results",
+            "/api/results/today",
+            "/api/results/day",
+            "/api/results/month",
+            "/api/results/changes",
             "/health",
         }:
             self.send_error(404)
@@ -791,6 +820,41 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"ok")
+            return
+        if parsed.path in {"/api/results", "/api/results/today", "/api/results/day", "/api/results/month", "/api/results/changes"}:
+            if not self._check_results_api_key(settings, parsed):
+                return
+            query = parse_qs(parsed.query)
+            try:
+                limit = int(query.get("limit", ["500"])[0])
+            except ValueError:
+                limit = 500
+            limit = max(1, min(5000, limit))
+            storage = Storage(settings.database_path)
+            try:
+                if parsed.path in {"/api/results", "/api/results/today", "/api/results/day"}:
+                    day = query.get("day", query.get("date", [""]))[0].strip()
+                    if not day:
+                        day = self._sao_paulo_now().date().isoformat()
+                    data = storage.bfbm_results_for_day(day, limit=limit)
+                elif parsed.path == "/api/results/month":
+                    month = query.get("month", [""])[0].strip()
+                    if not month:
+                        month = self._sao_paulo_now().strftime("%Y-%m")
+                    data = storage.bfbm_results_for_month(month, limit=limit)
+                else:
+                    cursor = query.get("since", query.get("cursor", [""]))[0].strip()
+                    data = storage.bfbm_results_since(cursor=cursor, limit=limit)
+            finally:
+                storage.close()
+            data.update(
+                {
+                    "ok": True,
+                    "source": "teste_gpt_bfbm_results",
+                    "generated_at": self._sao_paulo_now().isoformat(),
+                }
+            )
+            self._write_json_response(200, data)
             return
         if parsed.path == "/api/betfair/cache":
             if not self._check_betfair_cache_key(settings):

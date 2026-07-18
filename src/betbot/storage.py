@@ -920,5 +920,180 @@ class Storage:
             "real_bet_notifications": real_bets,
         }
 
+    @staticmethod
+    def _money_float(value: Any) -> float:
+        if value is None or value == "":
+            return 0.0
+        try:
+            return float(str(value).replace(",", "."))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _result_label(profit: float) -> str:
+        if profit > 0:
+            return "GREEN"
+        if profit < 0:
+            return "RED"
+        return "VOID"
+
+    def _bfbm_result_rows(
+        self,
+        where_sql: str,
+        params: tuple[Any, ...],
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            f"""
+            select
+                b.id as notification_id,
+                coalesce(nullif(b.settled_at, ''), a.settled_at, nullif(b.placed_at_iso, ''), b.created_at) as sort_at,
+                coalesce(nullif(b.settled_at, ''), a.settled_at, '') as settled_at,
+                coalesce(nullif(b.placed_at_iso, ''), nullif(b.placed_at, ''), b.created_at) as placed_at,
+                b.bet_id,
+                coalesce(b.alert_id, a.id) as alert_id,
+                coalesce(nullif(b.market_id, ''), a.betfair_market_id, '') as market_id,
+                coalesce(nullif(b.selection_id, ''), a.betfair_selection_id, '') as selection_id,
+                coalesce(nullif(b.handicap, ''), '') as handicap,
+                coalesce(nullif(b.side, ''), 'BACK') as side,
+                coalesce(nullif(b.order_status, ''), '') as order_status,
+                coalesce(b.price, a.odd, 0) as price,
+                replace(coalesce(nullif(b.size_matched, ''), '0'), ',', '.') + 0 as stake,
+                coalesce(b.profit, 0) as profit,
+                coalesce(nullif(b.strategy, ''), a.strategy, '') as strategy,
+                coalesce(nullif(a.home || ' x ' || a.away, ' x '), '') as event_name,
+                coalesce(a.home, '') as home,
+                coalesce(a.away, '') as away,
+                coalesce(a.minute, 0) as minute,
+                coalesce(a.market, '') as market,
+                coalesce(a.selection, '') as selection,
+                a.line,
+                coalesce(a.confidence, 0) as confidence,
+                coalesce(a.reason, '') as reason,
+                coalesce(a.status, '') as alert_status,
+                coalesce(a.user_action, '') as user_action,
+                coalesce(a.result_note, '') as result_note
+            from bfbm_bet_notifications b
+            left join alerts a
+              on a.id = b.alert_id
+              or (b.bet_id != '' and a.bfbm_bet_id = b.bet_id)
+            where b.profit is not null
+              and {where_sql}
+            order by sort_at desc, b.id desc
+            limit ?
+            """,
+            (*params, max(1, limit)),
+        ).fetchall()
+        result_rows: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            profit = self._money_float(item.get("profit"))
+            stake = self._money_float(item.get("stake"))
+            price = self._money_float(item.get("price"))
+            item["profit"] = round(profit, 2)
+            item["stake"] = round(stake, 2)
+            item["price"] = round(price, 4)
+            item["result"] = self._result_label(profit)
+            item["roi_percent"] = round(profit / stake * 100, 2) if stake else 0.0
+            item["cursor"] = f"{item.get('sort_at') or ''}|{item.get('notification_id') or ''}"
+            result_rows.append(item)
+        return result_rows
+
+    def _summarize_bfbm_results(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        total = len(rows)
+        green = sum(1 for row in rows if row["result"] == "GREEN")
+        red = sum(1 for row in rows if row["result"] == "RED")
+        void = sum(1 for row in rows if row["result"] == "VOID")
+        profit = round(sum(self._money_float(row.get("profit")) for row in rows), 2)
+        staked = round(sum(self._money_float(row.get("stake")) for row in rows), 2)
+        by_strategy: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            strategy = str(row.get("strategy") or "sem_estrategia")
+            bucket = by_strategy.setdefault(
+                strategy,
+                {"bets": 0, "green": 0, "red": 0, "void": 0, "profit": 0.0, "staked": 0.0},
+            )
+            bucket["bets"] += 1
+            bucket[row["result"].lower()] += 1
+            bucket["profit"] += self._money_float(row.get("profit"))
+            bucket["staked"] += self._money_float(row.get("stake"))
+        strategy_rows = []
+        for strategy, bucket in by_strategy.items():
+            stake = self._money_float(bucket["staked"])
+            profit_value = self._money_float(bucket["profit"])
+            strategy_rows.append(
+                {
+                    "strategy": strategy,
+                    "bets": bucket["bets"],
+                    "green": bucket["green"],
+                    "red": bucket["red"],
+                    "void": bucket["void"],
+                    "profit": round(profit_value, 2),
+                    "staked": round(stake, 2),
+                    "roi_percent": round(profit_value / stake * 100, 2) if stake else 0.0,
+                }
+            )
+        strategy_rows.sort(key=lambda item: (item["profit"], item["bets"]), reverse=True)
+        return {
+            "bets": total,
+            "green": green,
+            "red": red,
+            "void": void,
+            "profit": profit,
+            "staked": staked,
+            "roi_percent": round(profit / staked * 100, 2) if staked else 0.0,
+            "win_rate_percent": round(green / (green + red) * 100, 2) if green + red else 0.0,
+            "by_strategy": strategy_rows,
+        }
+
+    def bfbm_results_for_day(self, day: str, limit: int = 500) -> dict[str, Any]:
+        rows = self._bfbm_result_rows(
+            "date(coalesce(nullif(b.settled_at, ''), a.settled_at, nullif(b.placed_at_iso, ''), b.created_at)) = ?",
+            (day,),
+            limit=limit,
+        )
+        return {"day": day, "summary": self._summarize_bfbm_results(rows), "bets": rows}
+
+    def bfbm_results_for_month(self, month: str, limit: int = 5000) -> dict[str, Any]:
+        rows = self._bfbm_result_rows(
+            "substr(date(coalesce(nullif(b.settled_at, ''), a.settled_at, nullif(b.placed_at_iso, ''), b.created_at)), 1, 7) = ?",
+            (month,),
+            limit=limit,
+        )
+        return {"month": month, "summary": self._summarize_bfbm_results(rows), "bets": rows}
+
+    def bfbm_results_since(self, cursor: str = "", limit: int = 200) -> dict[str, Any]:
+        sort_at = ""
+        notification_id = 0
+        if cursor and "|" in cursor:
+            sort_at, raw_id = cursor.rsplit("|", 1)
+            try:
+                notification_id = int(raw_id)
+            except ValueError:
+                notification_id = 0
+        if sort_at:
+            where_sql = """
+                (
+                    coalesce(nullif(b.settled_at, ''), a.settled_at, nullif(b.placed_at_iso, ''), b.created_at) > ?
+                    or (
+                        coalesce(nullif(b.settled_at, ''), a.settled_at, nullif(b.placed_at_iso, ''), b.created_at) = ?
+                        and b.id > ?
+                    )
+                )
+            """
+            params: tuple[Any, ...] = (sort_at, sort_at, notification_id)
+        else:
+            where_sql = "1 = 1"
+            params = ()
+        rows = list(reversed(self._bfbm_result_rows(where_sql, params, limit=limit)))
+        next_cursor = rows[-1]["cursor"] if rows else cursor
+        return {
+            "since": cursor,
+            "next_cursor": next_cursor,
+            "count": len(rows),
+            "summary": self._summarize_bfbm_results(rows),
+            "bets": rows,
+        }
+
     def export_json(self) -> str:
         return json.dumps(self.last_alerts(20), ensure_ascii=False, indent=2)
