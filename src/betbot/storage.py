@@ -1095,5 +1095,75 @@ class Storage:
             "bets": rows,
         }
 
+    def bfbm_sync_diagnostics(self, limit: int = 20) -> dict[str, Any]:
+        stats = self.conn.execute(
+            """
+            select
+                count(*) as total_orders,
+                coalesce(sum(case when profit is not null then 1 else 0 end), 0) as with_profit,
+                coalesce(sum(case when alert_id is not null then 1 else 0 end), 0) as matched_alerts,
+                coalesce(sum(case when profit is not null and alert_id is not null then 1 else 0 end), 0) as matched_settled,
+                max(created_at) as last_received_at,
+                max(coalesce(nullif(settled_at, ''), nullif(placed_at_iso, ''), created_at)) as last_order_at
+            from bfbm_bet_notifications
+            """
+        ).fetchone()
+        today = self.conn.execute(
+            """
+            select
+                count(*) as orders_today,
+                coalesce(sum(case when profit is not null then 1 else 0 end), 0) as with_profit_today,
+                coalesce(sum(case when alert_id is not null then 1 else 0 end), 0) as matched_today
+            from bfbm_bet_notifications
+            where date(coalesce(nullif(settled_at, ''), nullif(placed_at_iso, ''), created_at)) = date('now')
+            """
+        ).fetchone()
+        recent = self.conn.execute(
+            """
+            select
+                id,
+                created_at,
+                placed_at_iso,
+                settled_at,
+                bet_id,
+                alert_id,
+                market_id,
+                selection_id,
+                side,
+                order_status,
+                price,
+                replace(coalesce(nullif(size_matched, ''), '0'), ',', '.') + 0 as stake,
+                profit,
+                strategy,
+                success
+            from bfbm_bet_notifications
+            order by coalesce(nullif(settled_at, ''), nullif(placed_at_iso, ''), created_at) desc, id desc
+            limit ?
+            """,
+            (max(1, limit),),
+        ).fetchall()
+        unmatched = self.conn.execute(
+            """
+            select
+                bet_id,
+                market_id,
+                selection_id,
+                order_status,
+                price,
+                profit,
+                created_at
+            from bfbm_bet_notifications
+            where alert_id is null
+            order by created_at desc, id desc
+            limit 10
+            """
+        ).fetchall()
+        return {
+            "stats": dict(stats or {}),
+            "today": dict(today or {}),
+            "recent_orders": [dict(row) for row in recent],
+            "recent_unmatched_orders": [dict(row) for row in unmatched],
+        }
+
     def export_json(self) -> str:
         return json.dumps(self.last_alerts(20), ensure_ascii=False, indent=2)

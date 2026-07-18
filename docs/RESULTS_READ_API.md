@@ -83,6 +83,48 @@ Na primeira chamada, omita `since`.
 
 A resposta retorna `next_cursor`. Guarde esse valor e envie na proxima chamada.
 
+## Diagnostico da Sincronizacao
+
+Use este endpoint quando `/api/results/today` estiver zerado e voce precisar descobrir se o problema esta na ponte, no writer de ordens, no casamento por IDs ou na liquidacao:
+
+```http
+GET /api/results/diagnostics?limit=20
+X-Api-Key: <RESULTS_API_KEY>
+```
+
+Resposta resumida:
+
+```json
+{
+  "ok": true,
+  "stats": {
+    "total_orders": 10,
+    "with_profit": 6,
+    "matched_alerts": 5,
+    "matched_settled": 4,
+    "last_received_at": "2026-07-18 10:00:00",
+    "last_order_at": "2026-07-18T12:55:00Z"
+  },
+  "today": {
+    "orders_today": 3,
+    "with_profit_today": 2,
+    "matched_today": 2
+  },
+  "recent_orders": [],
+  "recent_unmatched_orders": []
+}
+```
+
+Como interpretar:
+
+| Cenario | Significado |
+|---|---|
+| `total_orders = 0` | A ponte/local writer nao esta enviando ordens para o Railway. |
+| `total_orders > 0` e `with_profit = 0` | As ordens chegam, mas ainda sem lucro/prejuizo liquidado. |
+| `with_profit > 0` e `matched_alerts = 0` | As ordens chegam, mas nao estao casando com tips por `marketId + selectionId`. |
+| `matched_alerts > 0` e `matched_settled = 0` | As apostas casaram, mas ainda nao houve liquidacao com `profit`. |
+| `matched_settled > 0` | Ja existe resultado real para aparecer nos relatorios. |
+
 ## Formato da Resposta
 
 ```json

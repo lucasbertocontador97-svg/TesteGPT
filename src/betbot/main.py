@@ -812,6 +812,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/api/results/day",
             "/api/results/month",
             "/api/results/changes",
+            "/api/results/diagnostics",
             "/health",
         }:
             self.send_error(404)
@@ -821,7 +822,14 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"ok")
             return
-        if parsed.path in {"/api/results", "/api/results/today", "/api/results/day", "/api/results/month", "/api/results/changes"}:
+        if parsed.path in {
+            "/api/results",
+            "/api/results/today",
+            "/api/results/day",
+            "/api/results/month",
+            "/api/results/changes",
+            "/api/results/diagnostics",
+        }:
             if not self._check_results_api_key(settings, parsed):
                 return
             query = parse_qs(parsed.query)
@@ -832,7 +840,9 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             limit = max(1, min(5000, limit))
             storage = Storage(settings.database_path)
             try:
-                if parsed.path in {"/api/results", "/api/results/today", "/api/results/day"}:
+                if parsed.path == "/api/results/diagnostics":
+                    data = storage.bfbm_sync_diagnostics(limit=limit)
+                elif parsed.path in {"/api/results", "/api/results/today", "/api/results/day"}:
                     day = query.get("day", query.get("date", [""]))[0].strip()
                     if not day:
                         day = self._sao_paulo_now().date().isoformat()
