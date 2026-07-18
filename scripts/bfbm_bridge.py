@@ -557,8 +557,10 @@ def _market_id_value_from(row: dict[str, Any], *names: str) -> str:
 def _start_time_value_from(row: dict[str, Any], *names: str) -> str:
     value = _value_from(row, *names)
     if not value:
-        return "0001-01-01 00:00:00"
+        return _bridge_default_start_time()
     text = str(value).strip()
+    if text.startswith("0001-01-01"):
+        return _bridge_default_start_time()
     if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", text):
         return text
     for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
@@ -572,6 +574,10 @@ def _start_time_value_from(row: dict[str, Any], *names: str) -> str:
         return parsed.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
     except ValueError:
         return text
+
+
+def _bridge_default_start_time() -> str:
+    return (datetime.now(_sao_paulo_tz()) + timedelta(minutes=15)).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
 STANDARD_GOALS_SELECTION_IDS: dict[float, dict[str, str]] = {
@@ -840,7 +846,7 @@ class BridgeState:
         row["SelectionId"] = row["SelectionId"] or "0"
         row["MarketId"] = row["MarketId"] or "0"
         row["EventId"] = row["EventId"] or "0"
-        row["StartTime"] = row["StartTime"] or "0001-01-01 00:00:00"
+        row["StartTime"] = _start_time_value_from(row, "StartTime")
         row["BetType"] = (row["BetType"] or "BACK").upper()
         row["Size"] = row["Size"] or "0.58"
         row["Points"] = row["Points"] or "1"
