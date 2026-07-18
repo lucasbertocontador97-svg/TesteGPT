@@ -504,7 +504,15 @@ class Storage:
         return enriched
 
     def seen_alert(self, alert_key: str) -> bool:
-        row = self.conn.execute("select 1 from alerts where alert_key = ?", (alert_key,)).fetchone()
+        row = self.conn.execute(
+            """
+            select 1
+            from alerts
+            where alert_key = ?
+              and created_at >= datetime('now', '-6 hours')
+            """,
+            (alert_key,),
+        ).fetchone()
         return row is not None
 
     @staticmethod

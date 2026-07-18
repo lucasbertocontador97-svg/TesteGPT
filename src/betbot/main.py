@@ -1438,7 +1438,13 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             finally:
                 storage.close()
             if parsed.path in {"/bfbm/live-full.csv", "/bfbm/tips.csv"}:
-                rows, audits = full_rows_with_audit(alerts, config, catalog_rows, parsed.path)
+                rows, audits = full_rows_with_audit(
+                    alerts,
+                    config,
+                    catalog_rows,
+                    parsed.path,
+                    allow_name_fallback=True,
+                )
                 storage = Storage(settings.database_path)
                 try:
                     storage.record_bfbm_export_audit(audits)
