@@ -1016,6 +1016,15 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/bfbm/system-health.json":
             storage_status = database_storage_status(settings)
+            storage = Storage(settings.database_path)
+            try:
+                active_tips = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes, limit=12)
+                market_cache_count = len(storage.bfbm_markets(15))
+                strategy_report = storage.strategy_report(limit=20)
+                export_report = storage.bfbm_export_report(limit=30, hours=24)
+                sync_diagnostics = storage.bfbm_sync_diagnostics(limit=5)
+            finally:
+                storage.close()
             data = {
                 "ok": bool(storage_status["persistent"]),
                 "database": storage_status,
@@ -1023,6 +1032,22 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 "bfbm_token_configured": bool(settings.bfbm_token),
                 "poll_seconds": settings.poll_seconds,
                 "bfbm_max_tip_age_minutes": settings.bfbm_max_tip_age_minutes,
+                "active_tips_count": len(active_tips),
+                "active_tips": active_tips,
+                "betfair_market_cache_count_15m": market_cache_count,
+                "strategy_summary": {
+                    "total_alerts": strategy_report.get("total_alerts", 0),
+                    "by_status": strategy_report.get("by_status", {}),
+                    "by_action": strategy_report.get("by_action", {}),
+                    "recent": strategy_report.get("recent", [])[:10],
+                },
+                "export_audit_summary_24h": export_report.get("summary", []),
+                "recent_exports_24h": export_report.get("recent_exports", [])[:10],
+                "sync_summary": {
+                    "stats": sync_diagnostics.get("stats", {}),
+                    "today": sync_diagnostics.get("today", {}),
+                    "recent_orders": sync_diagnostics.get("recent_orders", [])[:5],
+                },
                 "warning": "" if storage_status["persistent"] else "Banco temporario: historico e auditoria podem sumir em redeploy/restart.",
             }
             body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
@@ -1400,9 +1425,15 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 selection_name or "FK Mornar",
             ).encode("utf-8-sig")
         else:
+            query = parse_qs(parsed.query)
+            try:
+                tips_limit = int(query.get("limit", ["12"])[0])
+            except ValueError:
+                tips_limit = 12
+            tips_limit = max(1, min(50, tips_limit))
             storage = Storage(settings.database_path)
             try:
-                alerts = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes)
+                alerts = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes, limit=tips_limit)
                 catalog_rows = storage.bfbm_markets(15)
             finally:
                 storage.close()

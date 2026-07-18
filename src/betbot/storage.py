@@ -648,7 +648,7 @@ class Storage:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def bfbm_tips(self, max_age_minutes: int, limit: int = 4) -> list[dict[str, Any]]:
+    def bfbm_tips(self, max_age_minutes: int, limit: int = 12) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
             select *

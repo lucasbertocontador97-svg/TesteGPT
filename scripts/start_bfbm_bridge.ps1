@@ -68,9 +68,9 @@ if (-not $env:BETFAIR_KEY_PATH) {
     --result-notify-url $ResultNotifyUrl `
     --sync-orders-url $SyncOrdersUrl `
     --sync-token $SyncToken `
-    --orders-poll-seconds 180 `
+    --orders-poll-seconds 60 `
     --api-token $BridgeApiToken `
     --min-price 1.80 `
     --max-price 100.00 `
     --max-tips 12 `
-    --tip-keep-seconds 600
+    --tip-keep-seconds 2700
