@@ -1438,12 +1438,15 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             finally:
                 storage.close()
             if parsed.path in {"/bfbm/live-full.csv", "/bfbm/tips.csv"}:
+                require_ids = str(query.get("ids", [""])[0]).strip().lower() in {"1", "true", "yes", "sim"} or str(
+                    query.get("require_ids", [""])[0]
+                ).strip().lower() in {"1", "true", "yes", "sim"}
                 rows, audits = full_rows_with_audit(
                     alerts,
                     config,
                     catalog_rows,
                     parsed.path,
-                    allow_name_fallback=True,
+                    allow_name_fallback=not require_ids,
                 )
                 storage = Storage(settings.database_path)
                 try:

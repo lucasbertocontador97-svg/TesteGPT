@@ -43,7 +43,7 @@ if (-not $RailwayToken) {
 if (-not $BridgeApiToken) {
     $BridgeApiToken = $RailwayToken
 }
-$SourceUrl = "$RailwayBase/bfbm/live-full.csv?token=$RailwayToken&limit=100"
+$SourceUrl = "$RailwayBase/bfbm/live-full.csv?token=$RailwayToken&limit=100&ids=1"
 $NotifyUrl = "$RailwayBase/bfbm/notify-bet?token=$RailwayToken"
 $ResultNotifyUrl = "$RailwayBase/bfbm/notify-bet-result?token=$RailwayToken"
 $SyncOrdersUrl = "$RailwayBase/api/bfbm/sync-orders"
@@ -70,7 +70,7 @@ $BridgeArgs = @(
     "--max-price", "100.00",
     "--max-tips", "100",
     "--tip-keep-seconds", "14400",
-    "--allow-missing-ids"
+    "--require-ids"
 )
 
 if ($SyncToken) {
