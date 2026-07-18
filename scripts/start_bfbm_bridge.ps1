@@ -40,9 +40,6 @@ $BridgeApiToken = $env:BFBM_BRIDGE_API_TOKEN
 if (-not $RailwayToken) {
     throw "Configure BFBM_TOKEN no ambiente antes de iniciar a ponte."
 }
-if (-not $SyncToken) {
-    throw "Configure BFBM_SYNC_TOKEN no ambiente antes de iniciar a ponte."
-}
 if (-not $BridgeApiToken) {
     $BridgeApiToken = $RailwayToken
 }
@@ -59,18 +56,26 @@ if (-not $env:BETFAIR_KEY_PATH) {
     $env:BETFAIR_KEY_PATH = "C:\BetfairCert\client-2048.key"
 }
 
-& $Python $Bridge `
-    --host "127.0.0.1" `
-    --port 8787 `
-    --source-url $SourceUrl `
-    --source-poll-seconds 20 `
-    --notify-url $NotifyUrl `
-    --result-notify-url $ResultNotifyUrl `
-    --sync-orders-url $SyncOrdersUrl `
-    --sync-token $SyncToken `
-    --orders-poll-seconds 60 `
-    --api-token $BridgeApiToken `
-    --min-price 1.80 `
-    --max-price 100.00 `
-    --max-tips 100 `
-    --tip-keep-seconds 14400
+$BridgeArgs = @(
+    $Bridge,
+    "--host", "127.0.0.1",
+    "--port", "8787",
+    "--source-url", $SourceUrl,
+    "--source-poll-seconds", "20",
+    "--notify-url", $NotifyUrl,
+    "--result-notify-url", $ResultNotifyUrl,
+    "--orders-poll-seconds", "60",
+    "--api-token", $BridgeApiToken,
+    "--min-price", "1.80",
+    "--max-price", "100.00",
+    "--max-tips", "100",
+    "--tip-keep-seconds", "14400"
+)
+
+if ($SyncToken) {
+    $BridgeArgs += @("--sync-orders-url", $SyncOrdersUrl, "--sync-token", $SyncToken)
+} else {
+    Write-Host "BFBM_SYNC_TOKEN ausente: sync de ordens via /api/bfbm/sync-orders desativado; tips e notificacoes seguem ativas."
+}
+
+& $Python @BridgeArgs
