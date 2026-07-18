@@ -11,6 +11,7 @@ function Use-UserEnv([string] $Name) {
 
 @(
     "BFBM_TOKEN",
+    "BFBM_SYNC_TOKEN",
     "BFBM_BRIDGE_API_TOKEN",
     "TESTEGPT_RAILWAY_BASE",
     "BETFAIR_USERNAME",
@@ -34,9 +35,13 @@ if (-not $RailwayBase) {
     $RailwayBase = "https://testegpt-production.up.railway.app"
 }
 $RailwayToken = $env:BFBM_TOKEN
+$SyncToken = $env:BFBM_SYNC_TOKEN
 $BridgeApiToken = $env:BFBM_BRIDGE_API_TOKEN
 if (-not $RailwayToken) {
     throw "Configure BFBM_TOKEN no ambiente antes de iniciar a ponte."
+}
+if (-not $SyncToken) {
+    throw "Configure BFBM_SYNC_TOKEN no ambiente antes de iniciar a ponte."
 }
 if (-not $BridgeApiToken) {
     $BridgeApiToken = $RailwayToken
@@ -44,6 +49,7 @@ if (-not $BridgeApiToken) {
 $SourceUrl = "$RailwayBase/bfbm/live-full.csv?token=$RailwayToken"
 $NotifyUrl = "$RailwayBase/bfbm/notify-bet?token=$RailwayToken"
 $ResultNotifyUrl = "$RailwayBase/bfbm/notify-bet-result?token=$RailwayToken"
+$SyncOrdersUrl = "$RailwayBase/api/bfbm/sync-orders"
 $Bridge = Join-Path $RepoRoot "scripts\bfbm_bridge.py"
 
 if (-not $env:BETFAIR_CERT_PATH) {
@@ -60,6 +66,8 @@ if (-not $env:BETFAIR_KEY_PATH) {
     --source-poll-seconds 20 `
     --notify-url $NotifyUrl `
     --result-notify-url $ResultNotifyUrl `
+    --sync-orders-url $SyncOrdersUrl `
+    --sync-token $SyncToken `
     --orders-poll-seconds 180 `
     --api-token $BridgeApiToken `
     --min-price 1.80 `

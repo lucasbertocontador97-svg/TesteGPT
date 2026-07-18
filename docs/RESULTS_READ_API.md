@@ -4,6 +4,14 @@ Esta API permite que outro sistema leia os resultados reais das apostas do BFBM/
 
 Ela e somente leitura. Nao cria aposta, nao cria tip e nao consulta a Betfair diretamente.
 
+Importante: esta API so retorna dados depois que a ponte local/VPS, ou outro writer autorizado, envia as ordens reais para:
+
+```text
+POST /api/bfbm/sync-orders
+```
+
+Se `/api/results/today` voltar `bets: 0`, significa que ainda nao houve aposta sincronizada para o dia, ou que o writer de ordens nao esta alimentando a base.
+
 ## Autenticacao
 
 Configure no Railway:

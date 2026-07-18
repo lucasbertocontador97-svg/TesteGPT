@@ -134,6 +134,32 @@ def _post_url(url: str, params: dict[str, str], timeout: int = 15) -> None:
         response.read()
 
 
+def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None, timeout: int = 20) -> dict[str, Any]:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request_headers = {
+        "User-Agent": "TesteGPT-BFBM-Bridge/1.0",
+        "Content-Type": "application/json",
+    }
+    if headers:
+        request_headers.update(headers)
+    req = urllib.request.Request(url, data=body, headers=request_headers, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        raw = response.read().decode("utf-8-sig")
+    if not raw.strip():
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"raw": raw}
+
+
+def _sao_paulo_tz() -> timezone:
+    try:
+        return ZoneInfo("America/Sao_Paulo")
+    except Exception:  # noqa: BLE001 - Windows VPS may not have IANA tzdata.
+        return timezone(timedelta(hours=-3))
+
+
 def _safe_order(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "betId": row.get("betId"),
@@ -185,11 +211,11 @@ def _local_date(value: Any) -> str:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return ""
-    return parsed.astimezone(ZoneInfo("America/Sao_Paulo")).date().isoformat()
+    return parsed.astimezone(_sao_paulo_tz()).date().isoformat()
 
 
 def _daily_settlement_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    today = datetime.now(ZoneInfo("America/Sao_Paulo")).date().isoformat()
+    today = datetime.now(_sao_paulo_tz()).date().isoformat()
     today_rows = [row for row in rows if _local_date(row.get("settledDate")) == today]
     profit = 0.0
     wins = 0
@@ -218,7 +244,7 @@ def _daily_settlement_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _monthly_settlement_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    today = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+    today = datetime.now(_sao_paulo_tz()).date()
     month_key = today.strftime("%Y-%m")
     month_rows = [row for row in rows if _local_date(row.get("settledDate")).startswith(month_key)]
     profit = 0.0
@@ -254,11 +280,16 @@ def _query_betfair_orders(
     bet_ids: list[str] | None = None,
     market_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    from dotenv import load_dotenv
     from betbot.betfair import BetfairClient, credentials_from_env
 
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        load_dotenv = None
+
     global _BETFAIR_ORDERS_CLIENT
-    load_dotenv(REPO_ROOT / ".env")
+    if load_dotenv:
+        load_dotenv(REPO_ROOT / ".env")
     if _BETFAIR_ORDERS_CLIENT is None:
         _BETFAIR_ORDERS_CLIENT = BetfairClient(credentials_from_env())
     client = _BETFAIR_ORDERS_CLIENT
@@ -305,14 +336,32 @@ def _is_betfair_auth_error(exc: Exception) -> bool:
     )
 
 
-def settlement_loop(state: BridgeState, notify_url: str | None, poll_seconds: int) -> None:
-    if not notify_url:
+def settlement_loop(
+    state: BridgeState,
+    notify_url: str | None,
+    poll_seconds: int,
+    sync_orders_url: str | None = None,
+    sync_token: str | None = None,
+) -> None:
+    if not notify_url and not sync_orders_url:
         return
     seeded = bool(state.seen_result_bet_ids)
     auth_cooldown_seconds = max(1800, poll_seconds * 30)
     while True:
         try:
             payload = _query_betfair_orders(hours=24 * 35, limit=1000)
+            if sync_orders_url:
+                try:
+                    sync_headers = {"X-Sync-Token": sync_token} if sync_token else {}
+                    sync_response = _post_json(sync_orders_url, payload, headers=sync_headers)
+                    print(
+                        "[sync] ordens enviadas: "
+                        f"rows={sync_response.get('total_rows', '?')} "
+                        f"matched={sync_response.get('matched', '?')} "
+                        f"settled={sync_response.get('settled', '?')}"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[sync] erro ao enviar ordens: {type(exc).__name__}: {exc}")
             cleared_rows = [row for row in (payload.get("cleared", {}).get("rows") or []) if isinstance(row, dict)]
             if not state.result_history_seeded:
                 state.seed_result_notifications([str(row.get("betId") or "") for row in cleared_rows])
@@ -1124,6 +1173,8 @@ def main() -> None:
     parser.add_argument("--source-poll-seconds", type=int, default=20)
     parser.add_argument("--notify-url", default="")
     parser.add_argument("--result-notify-url", default="")
+    parser.add_argument("--sync-orders-url", default="")
+    parser.add_argument("--sync-token", default="")
     parser.add_argument("--notify-sid-filter", default="")
     parser.add_argument("--orders-poll-seconds", type=int, default=60)
     parser.add_argument("--api-token", default="")
@@ -1167,10 +1218,16 @@ def main() -> None:
         args=(state, log_path, args.notify_url or None, 2, args.notify_sid_filter),
         daemon=True,
     ).start()
-    if args.result_notify_url:
+    if args.result_notify_url or args.sync_orders_url:
         threading.Thread(
             target=settlement_loop,
-            args=(state, args.result_notify_url or None, args.orders_poll_seconds),
+            args=(
+                state,
+                args.result_notify_url or None,
+                args.orders_poll_seconds,
+                args.sync_orders_url or None,
+                args.sync_token or None,
+            ),
             daemon=True,
         ).start()
 
@@ -1180,6 +1237,8 @@ def main() -> None:
     print(f"Ordens Betfair: http://{args.host}:{args.port}/betfair/orders.json")
     if args.result_notify_url:
         print(f"Resultados Betfair: notificando a cada {max(30, args.orders_poll_seconds)}s")
+    if args.sync_orders_url:
+        print(f"Sync ordens Railway: ativo a cada {max(30, args.orders_poll_seconds)}s")
     server.serve_forever()
 
 
