@@ -721,7 +721,19 @@ def rows_to_full_csv(rows: list[dict[str, str]]) -> str:
     buffer = io.StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=BFBM_COLUMNS, extrasaction="ignore")
     writer.writeheader()
+    seen: set[tuple[str, str, str, str, str, str]] = set()
     for row in rows:
+        key = (
+            str(row.get("EventId") or "").strip(),
+            str(row.get("MarketId") or "").strip(),
+            str(row.get("SelectionId") or "").strip(),
+            normalize_text(row.get("EventName") or ""),
+            normalize_text(row.get("MarketName") or ""),
+            normalize_text(row.get("SelectionName") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
         writer.writerow(row)
     return buffer.getvalue()
 
