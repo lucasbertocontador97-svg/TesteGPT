@@ -625,11 +625,23 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         return True
 
     def _check_betfair_ingest_token(self, settings) -> bool:
-        if not settings.betfair_ingest_token:
-            self.send_error(503, "BETFAIR_INGEST_TOKEN not configured")
+        accepted_tokens = [
+            token
+            for token in (
+                settings.betfair_ingest_token,
+                settings.bfbm_sync_token,
+                settings.bfbm_token,
+            )
+            if token
+        ]
+        if not accepted_tokens:
+            self.send_error(
+                503,
+                "BETFAIR_INGEST_TOKEN, BFBM_SYNC_TOKEN or BFBM_TOKEN not configured",
+            )
             return False
         provided = self.headers.get("X-Ingest-Token", "").strip()
-        if not hmac.compare_digest(provided, settings.betfair_ingest_token):
+        if not any(hmac.compare_digest(provided, token) for token in accepted_tokens):
             self.send_error(401)
             return False
         return True

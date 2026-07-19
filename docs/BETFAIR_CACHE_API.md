@@ -34,6 +34,9 @@ BETFAIR_INGEST_TOKEN=coloque_uma_chave_forte_para_o_publisher
 BETFAIR_CACHE_API_KEY=coloque_uma_chave_forte_aqui
 ```
 
+Recomendado: use `BETFAIR_INGEST_TOKEN` dedicado para o publisher.
+Para evitar parada operacional quando essa variavel ainda nao existir, o backend tambem aceita `BFBM_SYNC_TOKEN` ou `BFBM_TOKEN` no header `X-Ingest-Token`.
+
 No Railway:
 
 1. Abra o projeto.
@@ -49,7 +52,7 @@ Este endpoint e chamado somente pelo publisher local/VPS que tem acesso autoriza
 
 ```http
 POST /api/betfair/ingest
-X-Ingest-Token: <BETFAIR_INGEST_TOKEN>
+X-Ingest-Token: <BETFAIR_INGEST_TOKEN ou BFBM_SYNC_TOKEN ou BFBM_TOKEN>
 Content-Type: application/json
 ```
 

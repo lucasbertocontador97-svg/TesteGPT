@@ -16,7 +16,13 @@ if (-not $env:BETFAIR_KEY_PATH) {
 $ProductionIngestUrl = "https://smart-betting-bot-5.emergent.host/api/betfair/ingest"
 $IngestToken = $env:BETFAIR_INGEST_TOKEN
 if (-not $IngestToken) {
-    throw "Configure BETFAIR_INGEST_TOKEN no ambiente antes de iniciar o publisher."
+    $IngestToken = $env:BFBM_SYNC_TOKEN
+}
+if (-not $IngestToken) {
+    $IngestToken = $env:BFBM_TOKEN
+}
+if (-not $IngestToken) {
+    throw "Configure BETFAIR_INGEST_TOKEN, BFBM_SYNC_TOKEN ou BFBM_TOKEN no ambiente antes de iniciar o publisher."
 }
 
 & $Python (Join-Path $RepoRoot "scripts\betfair_ingest_publisher.py") `
