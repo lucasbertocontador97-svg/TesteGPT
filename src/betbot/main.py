@@ -17,7 +17,7 @@ from telegram.error import BadRequest, Conflict
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
-from .bfbm import BfbmConfig, debug_event_csv, debug_lab_csv, debug_minimal_csv, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, full_rows_with_audit, rows_to_full_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
+from .bfbm import BfbmConfig, alert_to_bfbm_row, debug_event_csv, debug_lab_csv, debug_minimal_csv, enrich_row_from_bfbm_catalog, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, full_rows_with_audit, rows_to_full_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
 from .bfbm_markets import _event_score, event_score_for_row, find_bfbm_market, market_family, market_line, payload_to_markets, row_market_family
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import database_storage_status, load_settings, require_runtime_settings, require_telegram_settings, settings_presence
@@ -101,6 +101,55 @@ def _record_bfbm_candidate_audit(
                 },
             }
         ]
+    )
+
+
+def _attach_bfbm_ids_to_alert(
+    storage: Storage,
+    settings,
+    alert_id: int,
+    game: GameSnapshot,
+    decision: Decision,
+    bfbm_market: dict | None,
+) -> None:
+    if not bfbm_market:
+        return
+    config = BfbmConfig(
+        provider=settings.bfbm_provider,
+        stake=settings.bfbm_stake,
+        min_price=settings.bfbm_min_price,
+        max_price=settings.bfbm_max_price,
+    )
+    alert_like = {
+        "id": alert_id,
+        "event_id": game.event_id,
+        "fixture_id": game.fixture_id,
+        "home": game.home,
+        "away": game.away,
+        "minute": game.minute,
+        "market": decision.market,
+        "selection": decision.selection,
+        "bookmaker": decision.bookmaker,
+        "odd": decision.odd,
+        "line": decision.line,
+        "confidence": decision.confidence,
+        "reason": decision.reason,
+        "stake": decision.stake,
+        "alert_key": decision.alert_key,
+        "strategy": decision.strategy,
+    }
+    row = alert_to_bfbm_row(alert_like, config)
+    if not row:
+        return
+    enriched = enrich_row_from_bfbm_catalog(row, [bfbm_market])
+    if not enriched:
+        return
+    storage.attach_betfair_export_ids(
+        alert_id,
+        event_id=enriched.get("EventId", ""),
+        market_id=enriched.get("MarketId", ""),
+        selection_id=enriched.get("SelectionId", ""),
+        start_time=enriched.get("StartTime", ""),
     )
 
 
@@ -1911,6 +1960,8 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                         bfbm_market=bfbm_market,
                     )
                 continue
+            if bfbm_source:
+                _attach_bfbm_ids_to_alert(storage, settings, alert_id, game, decision, bfbm_market)
             message = format_alert(game, decision)
             if settings.bfbm_export:
                 logger.info("Alerta salvo para BFBM sem Telegram ate confirmacao de aposta:\n%s", message)

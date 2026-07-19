@@ -141,6 +141,17 @@ def _id_or_zero(value: Any) -> str:
     return text if text else "0"
 
 
+def _market_id_or_zero(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text == "0":
+        return "0"
+    if text.startswith("1.") and text.replace(".", "", 1).isdigit():
+        return text
+    if text.isdigit():
+        return text
+    return "0"
+
+
 def _start_time_or_empty_default(value: Any) -> str:
     text = str(value or "").strip()
     return text if text else "0001-01-01 00:00:00"
@@ -314,14 +325,14 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
     row = {
         "Provider": config.provider,
         "Handicap": "0",
-        "SelectionId": _id_or_zero(alert.get("selection_id") or alert.get("SelectionId")),
-        "MarketId": _id_or_zero(alert.get("market_id") or alert.get("MarketId")),
+        "SelectionId": _id_or_zero(alert.get("betfair_selection_id") or alert.get("selection_id") or alert.get("SelectionId")),
+        "MarketId": _market_id_or_zero(alert.get("betfair_market_id") or alert.get("market_id") or alert.get("MarketId")),
         "EventId": _id_or_zero(alert.get("betfair_event_id") or alert.get("EventId")),
         "SelectionName": market["SelectionName"],
         "MarketName": market["MarketName"],
         "EventName": event_name,
         "MarketType": market["MarketType"],
-        "StartTime": _start_time_or_empty_default(alert.get("start_time") or alert.get("StartTime")),
+        "StartTime": _start_time_or_empty_default(alert.get("betfair_start_time") or alert.get("start_time") or alert.get("StartTime")),
         "BetType": "BACK",
         "Price": price_text,
         "Size": stake_text,
@@ -605,7 +616,7 @@ def full_rows_with_audit(
         if not row:
             audits.append(_audit_row(alert, endpoint, "SKIPPED", "unsupported_market_or_selection"))
             continue
-        if catalog_rows:
+        if catalog_rows and not _has_valid_export_ids(row):
             matched = enrich_row_from_bfbm_catalog(row, catalog_rows)
             if not matched:
                 if allow_name_fallback and _has_matchable_names(row):

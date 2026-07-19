@@ -638,6 +638,35 @@ class Storage:
         self.conn.commit()
         return self._alert_id(decision.alert_key)
 
+    def attach_betfair_export_ids(
+        self,
+        alert_id: int,
+        *,
+        event_id: str = "",
+        market_id: str = "",
+        selection_id: str = "",
+        start_time: str = "",
+    ) -> bool:
+        cursor = self.conn.execute(
+            """
+            update alerts
+            set betfair_event_id = coalesce(nullif(?, ''), betfair_event_id),
+                betfair_market_id = coalesce(nullif(?, ''), betfair_market_id),
+                betfair_selection_id = coalesce(nullif(?, ''), betfair_selection_id),
+                betfair_start_time = coalesce(nullif(?, ''), betfair_start_time)
+            where id = ?
+            """,
+            (
+                str(event_id or ""),
+                str(market_id or ""),
+                str(selection_id or ""),
+                str(start_time or ""),
+                alert_id,
+            ),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
     def last_alerts(self, limit: int = 5) -> list[dict[str, Any]]:
         rows = self.conn.execute("select * from alerts order by id desc limit ?", (limit,)).fetchall()
         return [dict(row) for row in rows]
