@@ -19,15 +19,18 @@ O outro sistema nao precisa consultar a Betfair. Ele consulta o TesteGPT, que de
 
 ## Importante
 
-O endpoint abaixo e somente leitura.
+O endpoint de leitura abaixo e somente leitura.
 
 Ele nao envia aposta, nao cria tips e nao consulta a Betfair em tempo real. Ele apenas le o cache salvo pelo bot.
+
+O cache precisa ser alimentado pelo publisher local/VPS atraves de `POST /api/betfair/ingest`.
 
 ## Configuracao
 
 Cadastre esta variavel no ambiente onde o bot roda:
 
 ```env
+BETFAIR_INGEST_TOKEN=coloque_uma_chave_forte_para_o_publisher
 BETFAIR_CACHE_API_KEY=coloque_uma_chave_forte_aqui
 ```
 
@@ -35,12 +38,41 @@ No Railway:
 
 1. Abra o projeto.
 2. Va em `Variables`.
-3. Adicione `BETFAIR_CACHE_API_KEY`.
+3. Adicione `BETFAIR_INGEST_TOKEN` e `BETFAIR_CACHE_API_KEY`.
 4. Faca redeploy.
 
 Nao coloque a chave real dentro do repositorio.
 
-## Endpoint
+## Endpoint de ingestao
+
+Este endpoint e chamado somente pelo publisher local/VPS que tem acesso autorizado a Betfair.
+
+```http
+POST /api/betfair/ingest
+X-Ingest-Token: <BETFAIR_INGEST_TOKEN>
+Content-Type: application/json
+```
+
+URL de producao:
+
+```text
+https://testegpt-production.up.railway.app/api/betfair/ingest
+```
+
+Resposta esperada:
+
+```json
+{
+  "ok": true,
+  "source": "testegpt-local-betfair-br",
+  "events": 120,
+  "markets": 1400
+}
+```
+
+O payload enviado pelo publisher deve conter `events[]`, `markets[]` e `runners[]` com `event_id`, `market_id`, `selection_id`, nomes e odds de back/lay.
+
+## Endpoint de leitura
 
 ```http
 GET /api/betfair/cache

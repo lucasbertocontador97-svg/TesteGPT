@@ -18,7 +18,16 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
 from .bfbm import BfbmConfig, alert_to_bfbm_row, debug_event_csv, debug_lab_csv, debug_minimal_csv, enrich_row_from_bfbm_catalog, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, full_rows_with_audit, rows_to_full_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
-from .bfbm_markets import _event_score, event_score_for_row, find_bfbm_market, market_family, market_line, payload_to_markets, row_market_family
+from .bfbm_markets import (
+    _event_score,
+    betfair_ingest_payload_to_markets,
+    event_score_for_row,
+    find_bfbm_market,
+    market_family,
+    market_line,
+    payload_to_markets,
+    row_market_family,
+)
 from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import database_storage_status, load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
@@ -615,6 +624,16 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _check_betfair_ingest_token(self, settings) -> bool:
+        if not settings.betfair_ingest_token:
+            self.send_error(503, "BETFAIR_INGEST_TOKEN not configured")
+            return False
+        provided = self.headers.get("X-Ingest-Token", "").strip()
+        if not hmac.compare_digest(provided, settings.betfair_ingest_token):
+            self.send_error(401)
+            return False
+        return True
+
     def _check_results_api_key(self, settings, parsed) -> bool:
         if not settings.results_api_key:
             self.send_error(503, "RESULTS_API_KEY not configured")
@@ -773,6 +792,41 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         settings = load_settings()
         parsed = urlparse(self.path)
+        if parsed.path == "/api/betfair/ingest":
+            if not self._check_betfair_ingest_token(settings):
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                if length > 50_000_000:
+                    self.send_error(413, "betfair ingest payload too large")
+                    return
+                raw = self.rfile.read(length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+                if not isinstance(payload, dict):
+                    self.send_error(400, "expected JSON object")
+                    return
+                rows = betfair_ingest_payload_to_markets(payload)
+                storage = Storage(settings.database_path)
+                try:
+                    count = storage.replace_bfbm_markets(rows)
+                finally:
+                    storage.close()
+                events = payload.get("events") if isinstance(payload.get("events"), list) else []
+                self._write_json_response(
+                    200,
+                    {
+                        "ok": True,
+                        "source": str(payload.get("source") or "betfair_ingest"),
+                        "events": len(events),
+                        "markets": count,
+                    },
+                )
+            except json.JSONDecodeError:
+                self.send_error(400, "invalid JSON")
+            except Exception:
+                logger.exception("Erro ao receber ingestao Betfair")
+                self._write_json_response(500, {"ok": False, "error": "ingest_failed"})
+            return
         if parsed.path == "/api/bfbm/sync-orders":
             if not self._check_bfbm_sync_token(settings):
                 return

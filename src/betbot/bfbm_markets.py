@@ -241,6 +241,109 @@ def payload_to_markets(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return parsed
 
 
+def _string_or_empty(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _floatish_or_empty(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    return str(value).strip()
+
+
+def betfair_ingest_payload_to_markets(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    events = payload.get("events")
+    if not isinstance(events, list):
+        return []
+    source = _string_or_empty(payload.get("source")) or "betfair_ingest"
+    captured_at = _string_or_empty(payload.get("captured_at")) or datetime.now(timezone.utc).isoformat()
+    parsed: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_id = _string_or_empty(event.get("event_id") or event.get("eventId") or event.get("id"))
+        event_name = _string_or_empty(event.get("event_name") or event.get("eventName") or event.get("name"))
+        start_time = _string_or_empty(event.get("start_time") or event.get("startTime") or event.get("openDate"))
+        live_score = _string_or_empty(event.get("live_score") or event.get("score"))
+        live_time = _string_or_empty(event.get("live_time") or event.get("time"))
+        markets = event.get("markets")
+        if not isinstance(markets, list):
+            continue
+        for market in markets:
+            if not isinstance(market, dict):
+                continue
+            market_id = _string_or_empty(market.get("market_id") or market.get("marketId"))
+            market_type = _string_or_empty(market.get("market_type") or market.get("marketType"))
+            market_name = _string_or_empty(market.get("market_name") or market.get("marketName"))
+            if not event_name or not market_name or not market_id:
+                continue
+            runners_raw = market.get("runners")
+            runners: list[dict[str, Any]] = []
+            if isinstance(runners_raw, list):
+                for runner in runners_raw:
+                    if not isinstance(runner, dict):
+                        continue
+                    runners.append(
+                        {
+                            "selectionId": _string_or_empty(
+                                runner.get("selection_id") or runner.get("selectionId")
+                            ),
+                            "runnerName": _string_or_empty(
+                                runner.get("runner_name") or runner.get("runnerName")
+                            ),
+                            "handicap": runner.get("handicap"),
+                            "status": _string_or_empty(runner.get("status")),
+                            "bestBackPrice": runner.get("best_back_price", runner.get("back")),
+                            "bestBackSize": runner.get("best_back_size", runner.get("back_size")),
+                            "bestLayPrice": runner.get("best_lay_price", runner.get("lay")),
+                            "bestLaySize": runner.get("best_lay_size", runner.get("lay_size")),
+                            "lastPriceTraded": runner.get("last_price_traded", runner.get("lastPriceTraded")),
+                        }
+                    )
+            raw = {
+                "source": source,
+                "captured_at": captured_at,
+                "event": {
+                    "id": event_id,
+                    "name": event_name,
+                    "competition": _string_or_empty(event.get("competition")),
+                    "countryCode": _string_or_empty(event.get("country_code") or event.get("countryCode")),
+                    "startTime": start_time,
+                    "inplay": bool(event.get("inplay")),
+                    "liveScore": live_score,
+                    "liveTime": live_time,
+                },
+                "description": {"marketType": market_type},
+                "book": {
+                    "status": _string_or_empty(market.get("status")),
+                    "inplay": bool(market.get("inplay")),
+                    "totalMatched": market.get("total_matched", market.get("totalMatched")),
+                },
+                "runners": runners,
+            }
+            parsed.append(
+                {
+                    "event_name": event_name,
+                    "market_name": market_name,
+                    "event_id": event_id,
+                    "market_id": market_id,
+                    "market_type": market_type,
+                    "status": _string_or_empty(market.get("status")),
+                    "start_time": start_time,
+                    "live_score": live_score,
+                    "live_time": live_time,
+                    "favorite": "",
+                    "winner": "",
+                    "total_matched": _floatish_or_empty(market.get("total_matched", market.get("totalMatched"))),
+                    "raw_json": json.dumps(raw, ensure_ascii=False),
+                    "source_path": source,
+                    "source_modified_at": captured_at,
+                    "source_age_seconds": 0.0,
+                }
+            )
+    return parsed
+
+
 def market_line(market_name: str) -> float | None:
     normalized = normalize_text(market_name).upper()
     type_match = re.search(r"(?:OVER_UNDER|FIRST_HALF_GOALS)_(\d{2,3})", normalized)
