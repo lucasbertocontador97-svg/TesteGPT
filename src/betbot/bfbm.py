@@ -71,6 +71,15 @@ def _bfbm_line_text(line: float) -> str:
     return _line_text(line).replace(".", ",")
 
 
+def _handicap_text(value: Any) -> str:
+    number = _num(value)
+    if number is None:
+        return "0"
+    if abs(number) < 0.001:
+        return "0"
+    return f"{number:g}"
+
+
 def _over_under_market_type(line: float) -> str | None:
     doubled = line * 2
     if abs(doubled - round(doubled)) > 0.001:
@@ -322,9 +331,17 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
     price_text = f"{price:.2f}" if price > 0 else ""
     is_match_odds = market.get("MarketType") == "MATCH_ODDS"
     stake_text = "1.00" if is_match_odds else f"{config.stake:.2f}"
+    market_type_for_handicap = str(
+        alert.get("bfbm_market_type")
+        or alert.get("market_type")
+        or alert.get("MarketType")
+        or market.get("MarketType")
+        or ""
+    ).upper()
+    handicap_value = alert.get("line") or alert.get("Line") or market.get("__line")
     row = {
         "Provider": config.provider,
-        "Handicap": "0",
+        "Handicap": _handicap_text(handicap_value) if market_type_for_handicap in {"ALT_TOTAL_GOALS", "CORNER_ODDS"} else "0",
         "SelectionId": _id_or_zero(alert.get("betfair_selection_id") or alert.get("selection_id") or alert.get("SelectionId")),
         "MarketId": _market_id_or_zero(alert.get("betfair_market_id") or alert.get("market_id") or alert.get("MarketId")),
         "EventId": _id_or_zero(alert.get("betfair_event_id") or alert.get("EventId")),
@@ -545,8 +562,15 @@ def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[st
     runner = _runner_for_catalog_market(enriched, match)
     if runner:
         enriched["SelectionId"] = _runner_selection_id(runner) or str(enriched.get("SelectionId", "0") or "0")
+        runner_handicap = runner.get("handicap")
+        if _num(runner_handicap) not in (None, 0.0):
+            enriched["Handicap"] = _handicap_text(runner_handicap)
     if str(enriched.get("SelectionId") or "").strip() in {"", "0"}:
         enriched["SelectionId"] = _standard_selection_id(enriched, match) or str(enriched.get("SelectionId", "0") or "0")
+    market_type = str(match.get("market_type") or enriched.get("MarketType") or "").upper()
+    if market_type in {"ALT_TOTAL_GOALS", "CORNER_ODDS"} and str(enriched.get("Handicap") or "0").strip() in {"", "0"}:
+        line = market_line(str(match.get("market_name") or "")) or _num(row.get("__line") or row.get("line") or row.get("Line"))
+        enriched["Handicap"] = _handicap_text(line)
     start_time = _normalize_bfbm_start_time(match.get("start_time") or "")
     if start_time:
         enriched["StartTime"] = start_time
