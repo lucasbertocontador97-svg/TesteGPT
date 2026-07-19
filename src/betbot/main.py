@@ -1117,6 +1117,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/debug-event.csv",
             "/bfbm/lab.csv",
             "/bfbm/create-test",
+            "/bfbm/create-catalog-test",
             "/bfbm/create-live-4",
             "/bfbm/create-live-00-goals",
             "/bfbm/markets.json",
