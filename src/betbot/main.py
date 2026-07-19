@@ -163,6 +163,65 @@ def _attach_bfbm_ids_to_alert(
     )
 
 
+def _catalog_raw_dict(market: dict[str, Any]) -> dict[str, Any]:
+    raw = market.get("raw")
+    if isinstance(raw, dict):
+        return raw
+    raw_json = market.get("raw_json")
+    if isinstance(raw_json, str) and raw_json.strip():
+        try:
+            parsed = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _catalog_runners_for_force(market: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = _catalog_raw_dict(market)
+    runners = raw.get("runners") or market.get("runners") or []
+    return [runner for runner in runners if isinstance(runner, dict)]
+
+
+def _catalog_runner_price(runner: dict[str, Any]) -> float | None:
+    for key in ("bestBackPrice", "best_back_price", "back", "lastPriceTraded", "last_price_traded"):
+        value = runner.get(key)
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            continue
+        if price > 1:
+            return price
+    return None
+
+
+def _catalog_runner_selection_id(runner: dict[str, Any]) -> str:
+    return str(runner.get("selectionId") or runner.get("selection_id") or runner.get("id") or "").strip()
+
+
+def _catalog_runner_name(runner: dict[str, Any]) -> str:
+    return str(runner.get("runnerName") or runner.get("runner_name") or runner.get("name") or "").strip()
+
+
+def _split_bfbm_event(event_name: str) -> tuple[str, str]:
+    for separator in (" x ", " v ", " vs "):
+        if separator in event_name:
+            home, away = event_name.split(separator, 1)
+            return home.strip(), away.strip()
+    return event_name.strip(), "BFBM"
+
+
+def _selection_side_from_runner_name(runner_name: str) -> str:
+    normalized = runner_name.casefold()
+    if any(token in normalized for token in ("under", "menos", "não", "nao", " no")):
+        return "under"
+    if any(token in normalized for token in ("yes", "sim")):
+        return "yes"
+    if any(token in normalized for token in ("no", "não", "nao")):
+        return "no"
+    return "over"
+
+
 def _format_bfbm_confirmed_tip_candidates(storage: Storage, settings, limit: int = 3) -> str:
     tips = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes, limit=limit)
     if not tips:
@@ -1594,6 +1653,171 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 storage.close()
             body = f"created={alert_id or ''}\nevent={home} v {away}\n".encode("utf-8")
             self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if parsed.path == "/bfbm/create-catalog-test":
+            query = parse_qs(parsed.query)
+            try:
+                max_age_minutes = int(query.get("max_age_minutes", ["20"])[0])
+            except ValueError:
+                max_age_minutes = 20
+            try:
+                min_price = float(query.get("min_price", [str(settings.bfbm_min_price)])[0])
+            except ValueError:
+                min_price = settings.bfbm_min_price
+            try:
+                max_price = float(query.get("max_price", [str(settings.bfbm_max_price)])[0])
+            except ValueError:
+                max_price = settings.bfbm_max_price
+            requested = [
+                part.strip().lower()
+                for part in query.get("families", ["match_odds,goals,btts,double_chance"])[0].split(",")
+                if part.strip()
+            ]
+            force_any_status = query.get("any_status", ["0"])[0].strip() in {"1", "true", "yes"}
+            storage = Storage(settings.database_path)
+            try:
+                catalog_rows = storage.bfbm_markets(max_age_minutes=max(1, min(1440, max_age_minutes)))
+                candidates: list[tuple[dict[str, Any], dict[str, Any], float, str]] = []
+                for market in catalog_rows:
+                    family = row_market_family(market)
+                    if family not in requested:
+                        continue
+                    event_id = str(market.get("event_id") or "").strip()
+                    market_id = str(market.get("market_id") or "").strip()
+                    event_name = str(market.get("event_name") or "").strip()
+                    market_name = str(market.get("market_name") or "").strip()
+                    if not event_id.isdigit() or event_id == "0" or not market_id or not event_name or not market_name:
+                        continue
+                    status = str(market.get("status") or "").strip().upper()
+                    if status in {"CLOSED", "FECHADO"}:
+                        continue
+                    if not force_any_status and status and status != "OPEN":
+                        continue
+                    line = market_line(market_name) or market_line(str(market.get("market_type") or ""))
+                    if family in {"goals", "first_half_goals", "corners"} and line is None:
+                        continue
+                    for runner in _catalog_runners_for_force(market):
+                        selection_id = _catalog_runner_selection_id(runner)
+                        runner_name = _catalog_runner_name(runner)
+                        if not selection_id.isdigit() or selection_id == "0" or not runner_name:
+                            continue
+                        price = _catalog_runner_price(runner)
+                        if price is None or price < min_price or price > max_price:
+                            continue
+                        if family in {"goals", "first_half_goals", "corners"}:
+                            side = _selection_side_from_runner_name(runner_name)
+                            if side not in {"over", "under"}:
+                                continue
+                        elif family == "btts":
+                            side = _selection_side_from_runner_name(runner_name)
+                            if side not in {"yes", "no"}:
+                                continue
+                        elif family == "double_chance":
+                            side = runner_name
+                        else:
+                            side = runner_name
+                        candidates.append((market, runner, price, side))
+
+                family_order = {family: index for index, family in enumerate(requested)}
+                candidates.sort(
+                    key=lambda item: (
+                        family_order.get(row_market_family(item[0]), 999),
+                        0 if str(item[0].get("status") or "").upper() == "OPEN" else 1,
+                        item[2],
+                    )
+                )
+                if not candidates:
+                    body_text = (
+                        "created=0\n"
+                        f"reason=nenhum mercado Betfair com runner e odd entre {min_price:.2f} e {max_price:.2f}\n"
+                        f"catalog_markets={len(catalog_rows)}\n"
+                    )
+                    body = body_text.encode("utf-8")
+                    self.send_response(200)
+                else:
+                    market, runner, price, selection = candidates[0]
+                    family = row_market_family(market)
+                    event_name = str(market.get("event_name") or "").strip()
+                    home, away = _split_bfbm_event(event_name)
+                    line = market_line(str(market.get("market_name") or "")) or market_line(str(market.get("market_type") or ""))
+                    if family == "match_odds":
+                        decision_market = "match_odds"
+                        decision_line = None
+                    elif family == "btts":
+                        decision_market = "btts"
+                        decision_line = None
+                    elif family == "double_chance":
+                        decision_market = "double_chance"
+                        decision_line = None
+                    elif family == "corners":
+                        decision_market = "corners"
+                        decision_line = line
+                    elif family == "first_half_goals":
+                        decision_market = "first_half_goals"
+                        decision_line = line
+                    else:
+                        decision_market = "goals"
+                        decision_line = line
+                    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+                    game = GameSnapshot(
+                        event_id=f"bfbm-catalog-force-{market.get('event_id')}-{market.get('market_id')}-{_catalog_runner_selection_id(runner)}-{stamp}",
+                        fixture_id=None,
+                        league="BFBM CATALOG FORCE",
+                        home=home,
+                        away=away,
+                        minute=None,
+                        score_home=None,
+                        score_away=None,
+                        stats={},
+                        markets=[],
+                    )
+                    decision = Decision(
+                        True,
+                        99,
+                        decision_market,
+                        selection,
+                        "Betfair",
+                        price,
+                        decision_line,
+                        "TIP FORCADA DE CATALOGO: mercado real Betfair com IDs completos para validar BFBM.",
+                        "teste",
+                        f"bfbm-catalog-force|{stamp}|{market.get('market_id')}|{_catalog_runner_selection_id(runner)}",
+                        strategy="BFBM_CATALOG_FORCE",
+                    )
+                    alert_id = storage.save_manual_alert(game, decision)
+                    if alert_id:
+                        storage.attach_betfair_export_ids(
+                            alert_id,
+                            event_id=str(market.get("event_id") or ""),
+                            market_id=str(market.get("market_id") or ""),
+                            selection_id=_catalog_runner_selection_id(runner),
+                            start_time=str(market.get("start_time") or ""),
+                        )
+                    body_text = (
+                        f"created={alert_id or 0}\n"
+                        f"event={event_name}\n"
+                        f"market={market.get('market_name')}\n"
+                        f"family={family}\n"
+                        f"selection={_catalog_runner_name(runner)}\n"
+                        f"price={price:.2f}\n"
+                        f"event_id={market.get('event_id')}\n"
+                        f"market_id={market.get('market_id')}\n"
+                        f"selection_id={_catalog_runner_selection_id(runner)}\n"
+                        f"live_csv=/bfbm/live-full.csv?ids=1\n"
+                    )
+                    body = body_text.encode("utf-8")
+                    self.send_response(200)
+            except Exception as exc:
+                logger.exception("Erro ao criar tip de catalogo BFBM")
+                body = f"error={type(exc).__name__}\n".encode("utf-8")
+                self.send_response(500)
+            finally:
+                storage.close()
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
