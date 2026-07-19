@@ -8,6 +8,7 @@ import sys
 import threading
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
@@ -554,6 +555,152 @@ async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, stora
     if learned_aliases:
         storage.record_bfbm_event_aliases(learned_aliases)
     return snapshots
+
+
+def _live_bfbm_alert_key(game: GameSnapshot, signal) -> str:
+    line = getattr(signal, "line", None)
+    return (
+        f"live-bfbm|{game.event_id}|"
+        f"{getattr(signal, 'market_family', '')}|"
+        f"{getattr(signal, 'selection', '')}|{line}|"
+        f"{getattr(signal, 'strategy', '')}"
+    )
+
+
+def _alert_dict_from_live_bfbm_signal(game: GameSnapshot, signal) -> dict[str, Any]:
+    family = getattr(signal, "market_family", "")
+    selection = getattr(signal, "selection", "")
+    return {
+        "id": None,
+        "event_id": game.event_id,
+        "fixture_id": game.fixture_id,
+        "home": game.home,
+        "away": game.away,
+        "minute": game.minute,
+        "score_home": game.score_home,
+        "score_away": game.score_away,
+        "market": market_label(family, selection),
+        "selection": selection,
+        "bookmaker": "Betfair/BFBM",
+        "odd": 0.0,
+        "line": getattr(signal, "line", None),
+        "confidence": getattr(signal, "confidence", 0),
+        "reason": getattr(signal, "reason", ""),
+        "stake": "baixa",
+        "alert_key": _live_bfbm_alert_key(game, signal),
+        "strategy": getattr(signal, "strategy", ""),
+        "status": "SENT",
+        "user_action": "PENDING",
+    }
+
+
+def _bfbm_export_dedupe_key(alert: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    line = alert.get("line")
+    if isinstance(line, float):
+        line_text = f"{line:g}"
+    else:
+        line_text = "" if line is None else str(line)
+    return (
+        str(alert.get("home") or "").strip().lower(),
+        str(alert.get("away") or "").strip().lower(),
+        str(alert.get("market") or "").strip().lower(),
+        str(alert.get("selection") or "").strip().lower(),
+        line_text,
+    )
+
+
+def _merge_bfbm_export_alerts(
+    live_alerts: list[dict[str, Any]],
+    stored_alerts: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for alert in [*live_alerts, *stored_alerts]:
+        key = _bfbm_export_dedupe_key(alert)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(alert)
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+async def build_live_bfbm_candidate_alerts(settings, limit: int = 12) -> list[dict[str, Any]]:
+    if not settings.bfbm_export or not settings.totalcorner_token:
+        return []
+    http = HttpJsonClient()
+    storage = Storage(settings.database_path)
+    try:
+        catalog_rows = storage.bfbm_markets(15)
+        if not catalog_rows:
+            return []
+        active_catalog = [
+            row
+            for row in catalog_rows
+            # In-play markets are frequently SUSPENDED for seconds after goals,
+            # corners, VAR checks, and attacks. Keep them exportable so BFBM can
+            # place the bet as soon as the market reopens; only final closed
+            # markets are not actionable.
+            if str(row.get("status") or "").upper() not in {"CLOSED", "FECHADO"}
+        ]
+        if not active_catalog:
+            return []
+        snapshots = await build_bfbm_totalcorner_snapshots(settings, http, storage)
+        candidates: list[dict[str, Any]] = []
+        for game in snapshots:
+            if len(candidates) >= limit:
+                break
+            event_label = f"{game.home} x {game.away}"
+            required_confidence = settings.min_confidence
+            if is_high_variance_match(game.home, game.away, game.league):
+                required_confidence = max(required_confidence, 85)
+            if game.minute is not None and game.minute < 25:
+                required_confidence = max(required_confidence, 85)
+            available_markets = bfbm_available_market_specs(active_catalog, event_label, min_score=75)
+            if not available_markets:
+                continue
+            signal = evaluate_game(
+                game,
+                min_confidence=required_confidence,
+                available_markets=available_markets,
+            )
+            if not getattr(signal, "approved", False):
+                continue
+            bfbm_market = find_bfbm_market(
+                active_catalog,
+                event_label,
+                getattr(signal, "market_family", ""),
+                getattr(signal, "line", None),
+            )
+            if not bfbm_market:
+                _record_bfbm_candidate_audit(
+                    storage,
+                    game,
+                    signal,
+                    status="SKIPPED",
+                    reason="live_csv_approved_without_exact_bfbm_market",
+                )
+                continue
+            alert = _alert_dict_from_live_bfbm_signal(game, signal)
+            _record_bfbm_candidate_audit(
+                storage,
+                game,
+                signal,
+                status="CANDIDATE",
+                reason="live_csv_generated_candidate",
+                bfbm_market=bfbm_market,
+            )
+            candidates.append(alert)
+        return candidates
+    except Exception:
+        logger.exception("Erro ao gerar candidatos live para CSV BFBM")
+        return []
+    finally:
+        storage.close()
+        await http.close()
 
 
 async def create_live_bfbm_zero_zero_goal_tests(settings, count: int = 4) -> tuple[int, list[str]]:
@@ -1556,6 +1703,18 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 require_ids = str(query.get("ids", [""])[0]).strip().lower() in {"1", "true", "yes", "sim"} or str(
                     query.get("require_ids", [""])[0]
                 ).strip().lower() in {"1", "true", "yes", "sim"}
+                live_alerts: list[dict[str, Any]] = []
+                live_candidates_enabled = str(query.get("live_candidates", ["1"])[0]).strip().lower() not in {
+                    "0",
+                    "false",
+                    "no",
+                    "nao",
+                    "não",
+                }
+                if live_candidates_enabled:
+                    live_alerts = asyncio.run(build_live_bfbm_candidate_alerts(settings, limit=tips_limit))
+                    if live_alerts:
+                        alerts = _merge_bfbm_export_alerts(live_alerts, alerts, limit=tips_limit)
                 rows, audits = full_rows_with_audit(
                     alerts,
                     config,
