@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
+import os
 import sys
 import time
 from collections import defaultdict
@@ -18,6 +20,51 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from betbot.betfair import BetfairAuthError, BetfairClient, credentials_from_env  # noqa: E402
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _acquire_singleton_lock() -> Path:
+    lock_dir = Path(os.getenv("LOCALAPPDATA") or Path.home())
+    lock_path = lock_dir / "testegpt_betfair_ingest_publisher.lock"
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                existing_pid = int(lock_path.read_text(encoding="utf-8").strip() or "0")
+            except (OSError, ValueError):
+                existing_pid = 0
+            if _pid_is_running(existing_pid):
+                raise RuntimeError(
+                    f"Publicador Betfair ja esta ativo no PID {existing_pid}. "
+                    "Feche a instancia antiga antes de iniciar outra."
+                )
+            try:
+                lock_path.unlink()
+            except OSError:
+                raise RuntimeError(f"Trava antiga existe e nao pode ser removida: {lock_path}") from None
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
+
+        def _cleanup_lock() -> None:
+            try:
+                if lock_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+                    lock_path.unlink()
+            except OSError:
+                pass
+
+        atexit.register(_cleanup_lock)
+        return lock_path
 
 
 def chunks(items: list[str], size: int) -> list[list[str]]:
@@ -198,6 +245,10 @@ def main() -> int:
     parser.add_argument("--auth-error-cooldown-seconds", type=int, default=3600)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
+
+    if not args.once:
+        lock_path = _acquire_singleton_lock()
+        print(f"Trava singleton ativa: {lock_path}", flush=True)
 
     client = BetfairClient(credentials_from_env())
     while True:

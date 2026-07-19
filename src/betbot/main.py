@@ -431,10 +431,19 @@ def _bfbm_totalcorner_live_limit(settings) -> int:
     return max(settings.max_live_events, BFBM_TOTALCORNER_MIN_LIVE_EVENTS)
 
 
+def _bfbm_market_cache_minutes(settings) -> int:
+    raw_minutes = getattr(settings, "bfbm_market_cache_minutes", 240)
+    try:
+        minutes = int(raw_minutes)
+    except (TypeError, ValueError):
+        minutes = 240
+    return max(30, min(1440, minutes))
+
+
 async def bfbm_totalcorner_overlap(settings) -> dict:
     storage = Storage(settings.database_path)
     try:
-        catalog_rows = storage.bfbm_markets(15)
+        catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
     finally:
         storage.close()
 
@@ -568,7 +577,7 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
 async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, storage: Storage) -> list[GameSnapshot]:
     if not settings.bfbm_export or not settings.totalcorner_token:
         return []
-    catalog_rows = storage.bfbm_markets(15)
+    catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
     if not catalog_rows:
         return []
     live = await load_totalcorner_live(settings, http, limit=_bfbm_totalcorner_live_limit(settings))
@@ -718,7 +727,7 @@ async def build_live_bfbm_candidate_alerts(settings, limit: int = 12) -> list[di
     http = HttpJsonClient()
     storage = Storage(settings.database_path)
     try:
-        catalog_rows = storage.bfbm_markets(15)
+        catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
         if not catalog_rows:
             return []
         active_catalog = [
@@ -793,7 +802,7 @@ async def create_live_bfbm_zero_zero_goal_tests(settings, count: int = 4) -> tup
     created: list[str] = []
     try:
         snapshots = await build_bfbm_totalcorner_snapshots(settings, http, storage)
-        catalog_rows = storage.bfbm_markets(15)
+        catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
         for game in snapshots:
             if len(created) >= count:
                 break
@@ -1297,7 +1306,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/bfbm/markets.json":
             storage = Storage(settings.database_path)
             try:
-                rows = storage.bfbm_markets(15)
+                rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
             finally:
                 storage.close()
             body = json.dumps({"markets": rows}, ensure_ascii=False).encode("utf-8")
@@ -1366,7 +1375,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             storage = Storage(settings.database_path)
             try:
                 active_tips = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes, limit=12)
-                market_cache_count = len(storage.bfbm_markets(15))
+                market_cache_count = len(storage.bfbm_markets(_bfbm_market_cache_minutes(settings)))
                 strategy_report = storage.strategy_report(limit=20)
                 export_report = storage.bfbm_export_report(limit=30, hours=24)
                 sync_diagnostics = storage.bfbm_sync_diagnostics(limit=5)
@@ -1379,9 +1388,10 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 "bfbm_token_configured": bool(settings.bfbm_token),
                 "poll_seconds": settings.poll_seconds,
                 "bfbm_max_tip_age_minutes": settings.bfbm_max_tip_age_minutes,
+                "bfbm_market_cache_minutes": _bfbm_market_cache_minutes(settings),
                 "active_tips_count": len(active_tips),
                 "active_tips": active_tips,
-                "betfair_market_cache_count_15m": market_cache_count,
+                "betfair_market_cache_count": market_cache_count,
                 "strategy_summary": {
                     "total_alerts": strategy_report.get("total_alerts", 0),
                     "by_status": strategy_report.get("by_status", {}),
@@ -1946,7 +1956,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             storage = Storage(settings.database_path)
             try:
                 alerts = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes, limit=tips_limit)
-                catalog_rows = storage.bfbm_markets(15)
+                catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
             finally:
                 storage.close()
             if parsed.path in {"/bfbm/live-full.csv", "/bfbm/tips.csv"}:
@@ -2247,7 +2257,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
             if not bfbm_source and not has_actionable_stats(game.stats):
                 logger.info("Sem estatisticas suficientes para %s x %s.", game.home, game.away)
                 continue
-            bfbm_catalog_rows = storage.bfbm_markets(15) if bfbm_source else []
+            bfbm_catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings)) if bfbm_source else []
             bfbm_available_markets = (
                 bfbm_available_market_specs(bfbm_catalog_rows, f"{game.home} x {game.away}")
                 if bfbm_source

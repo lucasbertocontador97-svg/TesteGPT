@@ -67,6 +67,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_bfbm_market_scanner.ps1
 
 O scanner le esses CSVs a cada poucos segundos, salva um snapshot local e envia para o Railway em `/bfbm/markets/snapshot`. O arquivo `EXPORTAR DADOS VISIVEIS.csv` traz status, placar e tempo; o arquivo `EXPORTAR MERCADOS.csv` traz `EventId`, `MarketId`, `MarketType` e horario. O feed `/bfbm/live-full.csv` usa esse catalogo para ajustar nomes de evento, mercado e selecao para o mesmo texto que o BFBM usa.
 
+O backend considera os mercados Betfair/BFBM recebidos nos ultimos `BFBM_MARKET_CACHE_MINUTES` minutos. O padrao recomendado e `240`, para que uma pausa curta da ponte nao faca o bot perder todos os casamentos de mercado.
+
 O scanner nao decide odds. Ele apenas confirma que o mercado existe no BFBM; a odd minima continua protegida pelo `MinPrice` do CSV e pela estrategia do BFBM.
 
 Rotina recomendada: atualize esses dois arquivos pelo BFBM pelo menos uma vez por dia. O bot aceita catalogos com ate 7 dias, mas quanto mais recente, menor a chance de um mercado ter mudado antes da partida.

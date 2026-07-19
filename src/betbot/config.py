@@ -46,6 +46,7 @@ class Settings:
     bfbm_min_price: float
     bfbm_max_price: float
     bfbm_max_tip_age_minutes: int
+    bfbm_market_cache_minutes: int
     betfair_ingest_token: str | None
     betfair_cache_api_key: str | None
     results_api_key: str | None
@@ -102,6 +103,7 @@ def load_settings() -> Settings:
         bfbm_min_price=float(os.getenv("BFBM_MIN_PRICE", "1.80")),
         bfbm_max_price=float(os.getenv("BFBM_MAX_PRICE", "8.00")),
         bfbm_max_tip_age_minutes=max(240, int(os.getenv("BFBM_MAX_TIP_AGE_MINUTES", "240"))),
+        bfbm_market_cache_minutes=max(30, int(os.getenv("BFBM_MARKET_CACHE_MINUTES", "240"))),
         betfair_ingest_token=os.getenv("BETFAIR_INGEST_TOKEN") or None,
         betfair_cache_api_key=os.getenv("BETFAIR_CACHE_API_KEY") or None,
         results_api_key=os.getenv("RESULTS_API_KEY") or None,
@@ -178,6 +180,7 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
         "GAME_COOLDOWN_MINUTES": bool(settings.game_cooldown_minutes),
         "BFBM_EXPORT": settings.bfbm_export,
         "BFBM_TOKEN": bool(settings.bfbm_token),
+        "BFBM_MARKET_CACHE_MINUTES": settings.bfbm_market_cache_minutes,
         "BETFAIR_INGEST_TOKEN": bool(settings.betfair_ingest_token),
         "BETFAIR_CACHE_API_KEY": bool(settings.betfair_cache_api_key),
         "RESULTS_API_KEY": bool(settings.results_api_key),
