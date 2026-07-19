@@ -418,6 +418,172 @@ def _candidate_is_available(signal: DeterministicSignal, available_markets: list
     return False
 
 
+def _bfbm_executable_candidates(
+    *,
+    available_markets: list[tuple[str, float | None]] | None,
+    minute: int,
+    current_goals: int,
+    score_home: int,
+    score_away: int,
+    total_shots: float,
+    shots_on: float,
+    corners: float,
+    attacks: float,
+    pressure: float,
+    pressure_label: str,
+    goal_mean: float,
+    min_confidence: int,
+    dead_game: bool,
+) -> list[DeterministicSignal]:
+    """Practical BFBM-only fallback: only uses markets already present with Betfair ids."""
+    if available_markets is None:
+        return []
+
+    practical_confidence = max(62, min(74, min_confidence - 12))
+    candidates: list[DeterministicSignal] = []
+
+    goal_lines = _available_lines(
+        available_markets,
+        "goals",
+        (0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5),
+    )
+    next_goal_lines = [
+        line
+        for line in goal_lines
+        if line >= 0.5 and line <= 8.5 and _needed_over(current_goals, line) == 1
+    ]
+    if next_goal_lines and 18 <= minute <= 85 and not dead_game:
+        target_line = min(next_goal_lines)
+        prob = _poisson_at_least(goal_mean, 1)
+        score = round(prob * 100)
+        conviction = _next_goal_conviction(score, total_shots, shots_on, corners, pressure)
+        flow_ok = (
+            (total_shots >= 7 and shots_on >= 2 and pressure >= 35)
+            or (total_shots >= 10 and pressure >= 28)
+            or (minute >= 55 and (pressure >= 30 or total_shots >= 6 or corners >= 3))
+            or (current_goals == 0 and 18 <= minute <= 25 and (total_shots >= 3 or attacks >= 30))
+        )
+        if flow_ok and prob >= 0.48:
+            conviction = max(conviction, practical_confidence)
+        if flow_ok and prob >= 0.38 and conviction >= practical_confidence:
+            candidates.append(
+                DeterministicSignal(
+                    True,
+                    "goals",
+                    "over",
+                    target_line,
+                    prob,
+                    conviction,
+                    conviction,
+                    f"BFBM confirmou mercado de proximo gol na linha {target_line:g}; probabilidade {prob:.0%}, conviccao {conviction}, chutes {total_shots:g}, no gol {shots_on:g}, escanteios {corners:g} e {pressure_label}.",
+                    "BFBM_EXECUTABLE_NEXT_GOAL",
+                )
+            )
+
+    under_lines = [
+        line
+        for line in goal_lines
+        if line > current_goals and line <= current_goals + 3.5 and line >= 0.5 and line <= 8.5
+    ]
+    if under_lines and 62 <= minute <= 86 and (dead_game or (total_shots <= 10 and shots_on <= 3 and pressure <= 45)):
+        target_line = min(under_lines)
+        additional_allowed = max(-1, math.ceil(target_line - current_goals) - 1)
+        prob = _poisson_at_most(goal_mean, additional_allowed)
+        score = round(prob * 100)
+        conviction = _under_goal_conviction(score, minute, total_shots, shots_on, pressure)
+        if prob >= 0.58 and conviction >= max(68, practical_confidence):
+            candidates.append(
+                DeterministicSignal(
+                    True,
+                    "goals",
+                    "under",
+                    target_line,
+                    prob,
+                    conviction,
+                    conviction,
+                    f"BFBM confirmou mercado under {target_line:g}; jogo frio com probabilidade {prob:.0%}, chutes {total_shots:g}, no gol {shots_on:g} e {pressure_label}.",
+                    "BFBM_EXECUTABLE_GOAL_UNDER",
+                )
+            )
+
+    if _has_market_family(available_markets, "btts") and 45 <= minute <= 80:
+        both_scored = score_home > 0 and score_away > 0
+        one_side_blank = (score_home == 0) != (score_away == 0)
+        if one_side_blank and total_shots >= 10 and shots_on >= 3 and pressure >= 45:
+            prob = _poisson_at_least(goal_mean, 1)
+            score = round(prob * 100)
+            conviction = _btts_yes_conviction(score, minute, current_goals, total_shots, shots_on, pressure)
+            if prob >= 0.42 and conviction >= practical_confidence:
+                candidates.append(
+                    DeterministicSignal(
+                        True,
+                        "btts",
+                        "yes",
+                        None,
+                        prob,
+                        conviction,
+                        conviction,
+                        f"BFBM confirmou BTTS; falta um time marcar e ha fluxo ofensivo com chutes {total_shots:g}, no gol {shots_on:g} e {pressure_label}.",
+                        "BFBM_EXECUTABLE_BTTS_YES",
+                    )
+                )
+        if not both_scored and minute >= 68 and total_shots <= 9 and shots_on <= 3 and pressure <= 42:
+            prob = _poisson_at_most(goal_mean, 0)
+            score = round(prob * 100)
+            conviction = _btts_no_conviction(score, minute, total_shots, shots_on, pressure)
+            if prob >= 0.56 and conviction >= practical_confidence:
+                candidates.append(
+                    DeterministicSignal(
+                        True,
+                        "btts",
+                        "no",
+                        None,
+                        prob,
+                        conviction,
+                        conviction,
+                        f"BFBM confirmou BTTS nao; jogo frio com probabilidade {prob:.0%} de nao sair novo gol, chutes {total_shots:g}, no gol {shots_on:g} e {pressure_label}.",
+                        "BFBM_EXECUTABLE_BTTS_NO",
+                    )
+                )
+
+    corner_lines = _available_lines(
+        available_markets,
+        "corners",
+        tuple(float(value) + 0.5 for value in range(max(0, int(corners) - 1), min(16, int(corners) + 4))),
+    )
+    viable_corner_lines = [line for line in corner_lines if line > corners and line <= corners + 2.5]
+    if viable_corner_lines and 37 <= minute <= 85 and (pressure >= 38 or total_shots >= 8 or corners >= 4):
+        target_line = min(viable_corner_lines)
+        needed_corners = _needed_over(int(corners), target_line)
+        corner_mean = _corner_lambda(minute, corners, total_shots, pressure)
+        prob = _poisson_at_least(corner_mean, needed_corners)
+        score = round(prob * 100)
+        conviction = _next_corner_conviction(
+            probability_score=score,
+            minute=minute,
+            corners=corners,
+            total_shots=total_shots,
+            shots_on=shots_on,
+            pressure=pressure,
+        )
+        if prob >= 0.50 and conviction >= practical_confidence:
+            candidates.append(
+                DeterministicSignal(
+                    True,
+                    "corners",
+                    "over",
+                    target_line,
+                    prob,
+                    conviction,
+                    conviction,
+                    f"BFBM confirmou mercado de escanteios na linha {target_line:g}; probabilidade {prob:.0%}, escanteios {corners:g}, chutes {total_shots:g}, no gol {shots_on:g} e {pressure_label}.",
+                    "BFBM_EXECUTABLE_CORNER_OVER",
+                )
+            )
+
+    return [candidate for candidate in candidates if _candidate_is_available(candidate, available_markets)]
+
+
 def evaluate_game(
     *,
     minute: int | None,
@@ -655,7 +821,36 @@ def evaluate_game(
                 )
             )
 
-    if not candidates:
+    available_candidates = [
+        candidate
+        for candidate in candidates
+        if _candidate_is_available(candidate, available_markets)
+    ]
+    if not available_candidates:
+        executable_candidates = _bfbm_executable_candidates(
+            available_markets=available_markets,
+            minute=minute,
+            current_goals=current_goals,
+            score_home=int(score_home),
+            score_away=int(score_away),
+            total_shots=total_shots,
+            shots_on=shots_on,
+            corners=corners,
+            attacks=attacks,
+            pressure=pressure,
+            pressure_label=pressure_label,
+            goal_mean=goal_mean,
+            min_confidence=min_confidence,
+            dead_game=dead_game,
+        )
+        if executable_candidates:
+            return sorted(
+                executable_candidates,
+                key=lambda item: (_candidate_priority(item), item.score, item.probability),
+                reverse=True,
+            )[0]
+
+    if not candidates and not available_candidates:
         return DeterministicSignal(
             False,
             "none",
@@ -668,12 +863,7 @@ def evaluate_game(
             "no_signal",
         )
 
-    candidates = [
-        candidate
-        for candidate in candidates
-        if _candidate_is_available(candidate, available_markets)
-    ]
-    if not candidates:
+    if not available_candidates:
         return DeterministicSignal(
             False,
             "none",
@@ -686,4 +876,4 @@ def evaluate_game(
             "no_bfbm_market",
         )
 
-    return sorted(candidates, key=lambda item: (_candidate_priority(item), item.score, item.probability), reverse=True)[0]
+    return sorted(available_candidates, key=lambda item: (_candidate_priority(item), item.score, item.probability), reverse=True)[0]
