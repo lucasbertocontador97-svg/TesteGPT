@@ -653,6 +653,31 @@ def _alert_dict_from_live_bfbm_signal(game: GameSnapshot, signal) -> dict[str, A
     }
 
 
+def _with_bfbm_export_ids(alert: dict[str, Any], settings, bfbm_market: dict | None) -> dict[str, Any]:
+    if not bfbm_market:
+        return alert
+    config = BfbmConfig(
+        provider=settings.bfbm_provider,
+        stake=settings.bfbm_stake,
+        min_price=settings.bfbm_min_price,
+        max_price=settings.bfbm_max_price,
+    )
+    row = alert_to_bfbm_row(alert, config)
+    if not row:
+        return alert
+    enriched = enrich_row_from_bfbm_catalog(row, [bfbm_market])
+    if not enriched:
+        return alert
+    enriched_alert = dict(alert)
+    enriched_alert["betfair_event_id"] = enriched.get("EventId", "")
+    enriched_alert["betfair_market_id"] = enriched.get("MarketId", "")
+    enriched_alert["betfair_selection_id"] = enriched.get("SelectionId", "")
+    enriched_alert["betfair_start_time"] = enriched.get("StartTime", "")
+    enriched_alert["bfbm_market_type"] = enriched.get("MarketType", "")
+    enriched_alert["odd"] = enriched.get("Price") or alert.get("odd", 0.0)
+    return enriched_alert
+
+
 def _bfbm_export_dedupe_key(alert: dict[str, Any]) -> tuple[str, str, str, str, str]:
     line = alert.get("line")
     if isinstance(line, float):
@@ -743,7 +768,7 @@ async def build_live_bfbm_candidate_alerts(settings, limit: int = 12) -> list[di
                     reason="live_csv_approved_without_exact_bfbm_market",
                 )
                 continue
-            alert = _alert_dict_from_live_bfbm_signal(game, signal)
+            alert = _with_bfbm_export_ids(_alert_dict_from_live_bfbm_signal(game, signal), settings, bfbm_market)
             _record_bfbm_candidate_audit(
                 storage,
                 game,

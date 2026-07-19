@@ -161,6 +161,21 @@ def _market_id_or_zero(value: Any) -> str:
     return "0"
 
 
+def _valid_event_id(value: Any) -> bool:
+    text = str(value or "").strip()
+    return text.isdigit() and text != "0"
+
+
+def _valid_market_id(value: Any) -> bool:
+    text = str(value or "").strip()
+    return text not in {"", "0"} and (text.isdigit() or (text.startswith("1.") and text.replace(".", "", 1).isdigit()))
+
+
+def _valid_selection_id(value: Any) -> bool:
+    text = str(value or "").strip()
+    return text.isdigit() and text != "0"
+
+
 def _start_time_or_empty_default(value: Any) -> str:
     text = str(value or "").strip()
     return text if text else "0001-01-01 00:00:00"
@@ -344,7 +359,7 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
         "Handicap": _handicap_text(handicap_value) if market_type_for_handicap in {"ALT_TOTAL_GOALS", "CORNER_ODDS"} else "0",
         "SelectionId": _id_or_zero(alert.get("betfair_selection_id") or alert.get("selection_id") or alert.get("SelectionId")),
         "MarketId": _market_id_or_zero(alert.get("betfair_market_id") or alert.get("market_id") or alert.get("MarketId")),
-        "EventId": _id_or_zero(alert.get("betfair_event_id") or alert.get("EventId")),
+        "EventId": _id_or_zero(alert.get("betfair_event_id") or alert.get("EventId") or alert.get("event_id")),
         "SelectionName": market["SelectionName"],
         "MarketName": market["MarketName"],
         "EventName": event_name,
@@ -544,12 +559,54 @@ def _selection_for_catalog_market(row: dict[str, str], market: dict[str, Any]) -
     return selection
 
 
+def _catalog_market_line_matches(market: dict[str, Any], family: str, desired_line: float | None) -> bool:
+    if desired_line is None:
+        return True
+    row_line = market_line(str(market.get("market_name") or market.get("MarketName") or "")) or market_line(
+        str(market.get("market_type") or market.get("MarketType") or "")
+    )
+    if row_line is not None:
+        return abs(row_line - desired_line) <= 0.01
+    market_type = normalize_text(market.get("market_type") or market.get("MarketType") or "")
+    market_name = normalize_text(market.get("market_name") or market.get("MarketName") or "")
+    if family == "goals" and ("alt_total_goals" in market_type or "linhas de gol" in market_name):
+        return True
+    if family == "corners" and ("corner" in market_type or "corners total" in market_name or "escanteio" in market_name):
+        return True
+    return False
+
+
+def _find_catalog_market_for_row(row: dict[str, str], catalog_rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    family = row_market_family(row)
+    desired_line = market_line(row.get("MarketName", "")) or market_line(row.get("MarketType", "")) or _num(row.get("__line"))
+    row_market_id = str(row.get("MarketId") or "").strip()
+    row_event_id = str(row.get("EventId") or "").strip()
+
+    active_rows = [
+        market
+        for market in catalog_rows
+        if str(market.get("status") or "").strip().upper() not in {"CLOSED", "FECHADO"}
+        and row_market_family(market) == family
+        and _catalog_market_line_matches(market, family, desired_line)
+    ]
+
+    if _valid_market_id(row_market_id):
+        for market in active_rows:
+            if str(market.get("market_id") or market.get("MarketId") or "").strip() == row_market_id:
+                return market
+
+    if _valid_event_id(row_event_id):
+        for market in active_rows:
+            if str(market.get("event_id") or market.get("EventId") or "").strip() == row_event_id:
+                return market
+
+    return find_bfbm_market(catalog_rows, row.get("EventName", ""), family, desired_line)
+
+
 def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[str, Any]]) -> dict[str, str] | None:
     if not catalog_rows:
         return row
-    family = row_market_family(row)
-    desired_line = market_line(row.get("MarketName", "")) or market_line(row.get("MarketType", ""))
-    match = find_bfbm_market(catalog_rows, row.get("EventName", ""), family, desired_line)
+    match = _find_catalog_market_for_row(row, catalog_rows)
     if not match:
         return None
     enriched = row.copy()
@@ -581,13 +638,7 @@ def _has_valid_export_ids(row: dict[str, str]) -> bool:
     event_id = str(row.get("EventId") or "").strip()
     market_id = str(row.get("MarketId") or "").strip()
     selection_id = str(row.get("SelectionId") or "").strip()
-    return (
-        event_id.isdigit()
-        and event_id != "0"
-        and market_id not in {"", "0"}
-        and selection_id.isdigit()
-        and selection_id != "0"
-    )
+    return _valid_event_id(event_id) and _valid_market_id(market_id) and _valid_selection_id(selection_id)
 
 
 def _has_matchable_names(row: dict[str, str]) -> bool:
