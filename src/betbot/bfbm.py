@@ -7,7 +7,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .bfbm_markets import find_bfbm_market, map_selection_to_event, market_family, market_line, normalize_text, row_market_family
+from .bfbm_markets import (
+    find_bfbm_market,
+    map_selection_to_event,
+    market_family,
+    market_line,
+    market_lines,
+    normalize_text,
+    row_market_family,
+)
 
 
 BFBM_COLUMNS = [
@@ -405,6 +413,29 @@ def _runner_selection_id(runner: dict[str, Any]) -> str:
     return str(runner.get("selectionId") or runner.get("selection_id") or runner.get("id") or "")
 
 
+def _runner_handicap(runner: dict[str, Any]) -> float | None:
+    value = _num(runner.get("handicap"))
+    if value is not None and abs(value) > 0.001:
+        return value
+    return market_line(_runner_name(runner))
+
+
+def _desired_line(row: dict[str, str], market: dict[str, Any]) -> float | None:
+    return (
+        market_line(str(market.get("market_name") or market.get("MarketName") or ""))
+        or market_line(str(market.get("market_type") or market.get("MarketType") or ""))
+        or _num(row.get("__line") or row.get("line") or row.get("Line") or row.get("Handicap"))
+    )
+
+
+def _runner_side_matches(row: dict[str, str], runner: dict[str, Any]) -> bool:
+    wanted_under = _selection_side(row) == "under"
+    runner_norm = normalize_text(_runner_name(runner))
+    if wanted_under:
+        return any(token in runner_norm for token in ("under", "menos"))
+    return any(token in runner_norm for token in ("over", "mais"))
+
+
 STANDARD_GOALS_SELECTION_IDS: dict[float, dict[str, str]] = {
     0.5: {"over": "5851483", "under": "5851482"},
     1.5: {"over": "1221386", "under": "1221385"},
@@ -433,11 +464,7 @@ def _selection_side(row: dict[str, str]) -> str:
 def _standard_selection_id(row: dict[str, str], market: dict[str, Any]) -> str:
     family = row_market_family(market)
     if family in {"goals", "first_half_goals"}:
-        line = (
-            market_line(str(market.get("market_name") or market.get("MarketName") or ""))
-            or market_line(str(market.get("market_type") or market.get("MarketType") or ""))
-            or _num(row.get("__line") or row.get("line") or row.get("Line"))
-        )
+        line = _desired_line(row, market)
         if line is None:
             return ""
         side = _selection_side(row)
@@ -452,7 +479,7 @@ def _selection_aliases_for_runner(row: dict[str, str], market: dict[str, Any]) -
     family = row_market_family(market)
     selection = str(row.get("SelectionName") or "").strip()
     aliases = {selection}
-    line = (market_line(str(market.get("market_name") or market.get("MarketName") or "")) or market_line(str(market.get("market_type") or market.get("MarketType") or "")) or _num(row.get("__line")))
+    line = _desired_line(row, market)
     line_dot = f"{line:g}" if line is not None else ""
     line_comma = line_dot.replace(".", ",")
     selection_norm = normalize_text(selection)
@@ -526,6 +553,15 @@ def _runner_for_catalog_market(row: dict[str, str], market: dict[str, Any]) -> d
     runners = _catalog_runners(market)
     if not runners:
         return None
+    family = row_market_family(market)
+    desired_line = _desired_line(row, market)
+    if family in {"goals", "first_half_goals", "corners"} and desired_line is not None:
+        for runner in runners:
+            runner_line = _runner_handicap(runner)
+            if runner_line is None or abs(runner_line - desired_line) > 0.01:
+                continue
+            if _runner_side_matches(row, runner):
+                return runner
     desired = {normalize_text(alias) for alias in _selection_aliases_for_runner(row, market)}
     for runner in runners:
         runner_name = _runner_name(runner)
@@ -550,7 +586,7 @@ def _selection_for_catalog_market(row: dict[str, str], market: dict[str, Any]) -
         original = selection.lower()
         return "Não" if "nao" in original or "não" in original or original == "no" else "Sim"
     if family in {"goals", "first_half_goals", "corners"}:
-        line = (market_line(str(market.get("market_name") or market.get("MarketName") or "")) or market_line(str(market.get("market_type") or market.get("MarketType") or "")) or _num(row.get("__line") or row.get("line") or row.get("Line")))
+        line = _desired_line(row, market)
         line_text = _bfbm_line_text(line) if line is not None else ""
         original = selection.lower()
         side = "Menos" if "menos" in original or "under" in original else "Mais"
@@ -562,11 +598,9 @@ def _selection_for_catalog_market(row: dict[str, str], market: dict[str, Any]) -
 def _catalog_market_line_matches(market: dict[str, Any], family: str, desired_line: float | None) -> bool:
     if desired_line is None:
         return True
-    row_line = market_line(str(market.get("market_name") or market.get("MarketName") or "")) or market_line(
-        str(market.get("market_type") or market.get("MarketType") or "")
-    )
-    if row_line is not None:
-        return abs(row_line - desired_line) <= 0.01
+    available_lines = market_lines(market)
+    if available_lines:
+        return any(abs(line - desired_line) <= 0.01 for line in available_lines)
     market_type = normalize_text(market.get("market_type") or market.get("MarketType") or "")
     market_name = normalize_text(market.get("market_name") or market.get("MarketName") or "")
     if family == "goals" and ("alt_total_goals" in market_type or "linhas de gol" in market_name):
@@ -603,6 +637,14 @@ def _find_catalog_market_for_row(row: dict[str, str], catalog_rows: list[dict[st
     return find_bfbm_market(catalog_rows, row.get("EventName", ""), family, desired_line)
 
 
+def _market_value(market: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = market.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
 def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[str, Any]]) -> dict[str, str] | None:
     if not catalog_rows:
         return row
@@ -610,25 +652,25 @@ def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[st
     if not match:
         return None
     enriched = row.copy()
-    enriched["EventName"] = str(match.get("event_name") or row.get("EventName", ""))
-    enriched["MarketName"] = str(match.get("market_name") or row.get("MarketName", ""))
-    enriched["EventId"] = str(match.get("event_id") or row.get("EventId", "0") or "0")
-    enriched["MarketId"] = str(match.get("market_id") or row.get("MarketId", "0") or "0")
-    enriched["MarketType"] = str(match.get("market_type") or row.get("MarketType", ""))
+    enriched["EventName"] = str(_market_value(match, "event_name", "EventName") or row.get("EventName", ""))
+    enriched["MarketName"] = str(_market_value(match, "market_name", "MarketName") or row.get("MarketName", ""))
+    enriched["EventId"] = str(_market_value(match, "event_id", "EventId") or row.get("EventId", "0") or "0")
+    enriched["MarketId"] = str(_market_value(match, "market_id", "MarketId") or row.get("MarketId", "0") or "0")
+    enriched["MarketType"] = str(_market_value(match, "market_type", "MarketType") or row.get("MarketType", ""))
     enriched["SelectionName"] = _selection_for_catalog_market(enriched, match)
     runner = _runner_for_catalog_market(enriched, match)
     if runner:
         enriched["SelectionId"] = _runner_selection_id(runner) or str(enriched.get("SelectionId", "0") or "0")
-        runner_handicap = runner.get("handicap")
-        if _num(runner_handicap) not in (None, 0.0):
+        runner_handicap = _runner_handicap(runner)
+        if runner_handicap not in (None, 0.0):
             enriched["Handicap"] = _handicap_text(runner_handicap)
     if str(enriched.get("SelectionId") or "").strip() in {"", "0"}:
         enriched["SelectionId"] = _standard_selection_id(enriched, match) or str(enriched.get("SelectionId", "0") or "0")
-    market_type = str(match.get("market_type") or enriched.get("MarketType") or "").upper()
+    market_type = str(_market_value(match, "market_type", "MarketType") or enriched.get("MarketType") or "").upper()
     if market_type in {"ALT_TOTAL_GOALS", "CORNER_ODDS"} and str(enriched.get("Handicap") or "0").strip() in {"", "0"}:
-        line = market_line(str(match.get("market_name") or "")) or _num(row.get("__line") or row.get("line") or row.get("Line"))
+        line = _desired_line(row, match)
         enriched["Handicap"] = _handicap_text(line)
-    start_time = _normalize_bfbm_start_time(match.get("start_time") or "")
+    start_time = _normalize_bfbm_start_time(_market_value(match, "start_time", "StartTime") or "")
     if start_time:
         enriched["StartTime"] = start_time
     return enriched

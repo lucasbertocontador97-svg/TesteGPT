@@ -361,6 +361,59 @@ def market_line(market_name: str) -> float | None:
         return None
 
 
+def _num(value: Any) -> float | None:
+    try:
+        return float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def _raw_market(row: dict[str, Any]) -> dict[str, Any]:
+    raw = row.get("raw")
+    if isinstance(raw, dict):
+        return raw
+    raw_json = row.get("raw_json")
+    if isinstance(raw_json, str) and raw_json.strip():
+        try:
+            parsed = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def market_runners(row: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = _raw_market(row)
+    runners = raw.get("runners") or row.get("runners") or []
+    return [runner for runner in runners if isinstance(runner, dict)]
+
+
+def _runner_line(runner: dict[str, Any]) -> float | None:
+    handicap = _num(runner.get("handicap"))
+    if handicap is not None and abs(handicap) > 0.001:
+        return handicap
+    runner_name = str(runner.get("runnerName") or runner.get("runner_name") or runner.get("name") or "")
+    return market_line(runner_name)
+
+
+def market_lines(row: dict[str, Any]) -> set[float]:
+    lines: set[float] = set()
+    for value in (
+        row.get("market_name"),
+        row.get("MarketName"),
+        row.get("market_type"),
+        row.get("MarketType"),
+    ):
+        line = market_line(str(value or ""))
+        if line is not None:
+            lines.add(round(float(line), 2))
+    for runner in market_runners(row):
+        line = _runner_line(runner)
+        if line is not None:
+            lines.add(round(float(line), 2))
+    return lines
+
+
 def market_family(market_name: str) -> str:
     normalized = normalize_text(market_name)
     compact = normalized.upper()
@@ -451,7 +504,7 @@ def event_score_for_row(event_name: str, row: dict[str, Any]) -> int:
 
 
 def _active_market(row: dict[str, Any]) -> bool:
-    status = normalize_text(row.get("status", ""))
+    status = normalize_text(row.get("status") or row.get("Status") or "")
     return "closed" not in status and "fechado" not in status
 
 
@@ -471,20 +524,18 @@ def find_bfbm_market(
         line_priority = 0
         matched_line_delta = 99.0
         if desired_line is not None:
-            row_line = market_line(str(row.get("market_name") or "")) or market_line(str(row.get("market_type") or ""))
-            market_type = normalize_text(row.get("market_type", ""))
-            market_name = normalize_text(row.get("market_name", ""))
+            row_lines = market_lines(row)
+            market_type = normalize_text(row.get("market_type") or row.get("MarketType") or "")
+            market_name = normalize_text(row.get("market_name") or row.get("MarketName") or "")
             generic_line_market = (
                 desired_family == "goals"
-                and row_line is None
                 and ("alt_total_goals" in market_type or "linhas de gol" in market_name)
             ) or (
                 desired_family == "corners"
-                and row_line is None
                 and ("corner" in market_type or "corners total" in market_name or "escanteio" in market_name)
             )
-            if row_line is not None:
-                matched_line_delta = abs(row_line - desired_line)
+            if row_lines:
+                matched_line_delta = min(abs(row_line - desired_line) for row_line in row_lines)
                 if matched_line_delta <= 0.01:
                     line_priority = 2
                 else:

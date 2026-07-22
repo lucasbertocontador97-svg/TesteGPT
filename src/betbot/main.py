@@ -26,6 +26,7 @@ from .bfbm_markets import (
     find_bfbm_market,
     market_family,
     market_line,
+    market_lines,
     payload_to_markets,
     row_market_family,
 )
@@ -325,7 +326,8 @@ def bfbm_available_market_specs(catalog_rows: list[dict], event_name: str, min_s
         if _event_score(event_name, str(row.get("event_name") or "")) < min_score:
             continue
         family = row_market_family(row)
-        line = market_line(str(row.get("market_name") or "")) or market_line(str(row.get("market_type") or ""))
+        lines = market_lines(row)
+        line = min(lines) if lines else None
         market_type = str(row.get("market_type") or "").casefold()
         market_name = str(row.get("market_name") or "").casefold()
         if family == "goals" and line is None and ("alt_total_goals" in market_type or "linhas de gol" in market_name):
@@ -333,7 +335,7 @@ def bfbm_available_market_specs(catalog_rows: list[dict], event_name: str, min_s
         elif family == "corners" and line is None and ("corner" in market_type or "corners total" in market_name or "escanteio" in market_name):
             candidate_lines = [float(value) + 0.5 for value in range(0, 16)]
         else:
-            candidate_lines = [line]
+            candidate_lines = sorted(lines) if lines else [line]
         for candidate_line in candidate_lines:
             key = (family, candidate_line)
             if key in seen:
