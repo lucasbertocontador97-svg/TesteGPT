@@ -73,10 +73,10 @@ $BridgeArgs = @(
     "--require-ids"
 )
 
-if ($SyncToken) {
-    $BridgeArgs += @("--sync-orders-url", $SyncOrdersUrl, "--sync-token", $SyncToken)
-} else {
-    Write-Host "BFBM_SYNC_TOKEN ausente: sync de ordens via /api/bfbm/sync-orders desativado; tips e notificacoes seguem ativas."
+if (-not $SyncToken) {
+    $SyncToken = $RailwayToken
+    Write-Host "BFBM_SYNC_TOKEN ausente: usando BFBM_TOKEN como fallback seguro para sincronizacao."
 }
+$BridgeArgs += @("--sync-orders-url", $SyncOrdersUrl, "--sync-token", $SyncToken)
 
 & $Python @BridgeArgs

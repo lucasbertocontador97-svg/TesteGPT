@@ -847,11 +847,19 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         return True
 
     def _check_bfbm_sync_token(self, settings) -> bool:
-        if not settings.bfbm_sync_token:
-            self.send_error(503, "BFBM_SYNC_TOKEN not configured")
+        accepted_tokens = [
+            token
+            for token in (
+                settings.bfbm_sync_token,
+                settings.bfbm_token,
+            )
+            if token
+        ]
+        if not accepted_tokens:
+            self.send_error(503, "BFBM_SYNC_TOKEN or BFBM_TOKEN not configured")
             return False
         provided = self.headers.get("X-Sync-Token", "").strip()
-        if not hmac.compare_digest(provided, settings.bfbm_sync_token):
+        if not any(hmac.compare_digest(provided, token) for token in accepted_tokens):
             self.send_error(401)
             return False
         return True
@@ -1165,6 +1173,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/notify-bet",
             "/bfbm/notify-bet-result",
             "/api/betfair/cache",
+            "/api/betfair/orders",
             "/api/results",
             "/api/results/today",
             "/api/results/day",
@@ -1179,6 +1188,28 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"ok")
+            return
+        if parsed.path == "/api/betfair/orders":
+            if not self._check_results_api_key(settings, parsed):
+                return
+            query = parse_qs(parsed.query)
+            try:
+                limit = int(query.get("limit", ["1000"])[0])
+            except ValueError:
+                limit = 1000
+            storage = Storage(settings.database_path)
+            try:
+                data = storage.betfair_orders(limit=max(1, min(5000, limit)))
+            finally:
+                storage.close()
+            data.update(
+                {
+                    "ok": True,
+                    "source": "teste_gpt_bfbm_synced_orders",
+                    "generated_at": self._sao_paulo_now().isoformat(),
+                }
+            )
+            self._write_json_response(200, data)
             return
         if parsed.path in {
             "/api/results",

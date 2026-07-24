@@ -1202,5 +1202,58 @@ class Storage:
             "recent_unmatched_orders": [dict(row) for row in unmatched],
         }
 
+    def betfair_orders(self, limit: int = 1000) -> dict[str, Any]:
+        rows = self.conn.execute(
+            """
+            select
+                bet_id,
+                market_id,
+                selection_id,
+                handicap,
+                side,
+                price,
+                replace(coalesce(nullif(size_matched, ''), '0'), ',', '.') + 0 as size,
+                profit,
+                order_status,
+                placed_at_iso,
+                settled_at
+            from bfbm_bet_notifications
+            where market_id is not null
+              and market_id != ''
+              and selection_id is not null
+              and selection_id != ''
+            order by coalesce(nullif(settled_at, ''), nullif(placed_at_iso, ''), created_at) desc, id desc
+            limit ?
+            """,
+            (max(1, limit),),
+        ).fetchall()
+        current: list[dict[str, Any]] = []
+        cleared: list[dict[str, Any]] = []
+        for record in rows:
+            row = dict(record)
+            safe = {
+                "betId": str(row.get("bet_id") or ""),
+                "marketId": str(row.get("market_id") or ""),
+                "selectionId": str(row.get("selection_id") or ""),
+                "handicap": str(row.get("handicap") or ""),
+                "side": str(row.get("side") or ""),
+                "price": row.get("price"),
+                "size": row.get("size"),
+                "profit": row.get("profit"),
+                "status": str(row.get("order_status") or ""),
+                "placedDate": str(row.get("placed_at_iso") or ""),
+                "settledDate": str(row.get("settled_at") or ""),
+            }
+            is_cleared = (
+                safe["profit"] is not None
+                or bool(safe["settledDate"])
+                or safe["status"].upper() == "SETTLED"
+            )
+            (cleared if is_cleared else current).append(safe)
+        return {
+            "current": {"count": len(current), "rows": current},
+            "cleared": {"count": len(cleared), "rows": cleared},
+        }
+
     def export_json(self) -> str:
         return json.dumps(self.last_alerts(20), ensure_ascii=False, indent=2)
