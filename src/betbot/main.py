@@ -1512,7 +1512,6 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             sid = query.get("sid", [""])[0].strip()
             silent = query.get("silent", [""])[0].strip().lower() in {"1", "true", "yes", "sim"}
             raw_line = query.get("line", [""])[0].strip()
-            tips_snapshot = query.get("tips_snapshot", [""])[0].strip()
             placed_at_iso = ""
             if placed_at:
                 try:
@@ -1524,23 +1523,16 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 matched = float(size_matched.replace(",", ".") or "0") > 0
             except ValueError:
                 matched = False
-            title = "\u2705 APOSTA FEITA NO BFBM" if matched else "\u26a0\ufe0f APOSTA NAO CASADA NO BFBM"
+            title = "\u2705 APOSTA FEITA" if matched else "\u26a0\ufe0f APOSTA NÃO CASADA"
             text = (
-                f"{title}\n\n"
-                f"Bet ID: {bet_id or '-'}\n"
-                f"Matched: {size_matched or '0'}\n"
-                f"Status: {success or '-'}\n"
-                f"Estrategia: {strategy or '-'}\n"
-                f"SID: {sid or '-'}\n"
-                f"Horario BFBM: {placed_at or '-'}"
+                f"{title}\n"
+                f"Valor: R$ {(size_matched or '0').replace('.', ',')}\n"
+                f"Estratégia: {strategy or '-'}"
             )
-            if raw_line:
-                text += f"\n\nLog: {raw_line[:500]}"
             try:
                 storage = Storage(settings.database_path)
                 try:
                     active_tips = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes, limit=5)
-                    tips_text = _format_bfbm_confirmed_tip_candidates(storage, settings, limit=5)
                     storage.record_bfbm_bet_notification(
                         {
                             "bet_id": bet_id,
@@ -1553,25 +1545,13 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                             "line": raw_line,
                         }
                     )
-                    linked_tip = None
-                    link_note = ""
                     if matched:
                         if len(active_tips) == 1:
                             linked_tip = active_tips[0]
                             storage.mark_bfbm_bet(int(linked_tip["id"]), bet_id, placed_at_iso or placed_at)
-                            link_note = f"\n\nTip vinculada: alert_id={linked_tip['id']}"
-                        elif not active_tips:
-                            link_note = "\n\nAviso: nao encontrei tip ativa para vincular resultado automaticamente."
-                        else:
-                            link_note = (
-                                "\n\nAviso: havia mais de uma tip ativa; nao vinculei resultado automaticamente "
-                                "para evitar marcar a entrada errada."
-                            )
                 finally:
                     storage.close()
                 if matched and not silent:
-                    snapshot_text = _format_bfbm_snapshot(tips_snapshot)
-                    text += f"\n\n{snapshot_text or tips_text}{link_note}"
                     require_telegram_settings(settings)
                     asyncio.run(send_message(settings.telegram_bot_token, settings.telegram_chat_id, text))
                 body = b"sent\n"
@@ -2527,15 +2507,11 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 storage.settle_alert(int(alert["id"]), result[0], result[1])
         if not settings.dry_run:
             result_notifications = storage.pending_result_notifications()
-            if result_notifications:
-                require_telegram_settings(settings)
-                for alert in result_notifications:
-                    await send_message(
-                        settings.telegram_bot_token,
-                        settings.telegram_chat_id,
-                        _format_result_notification(alert),
-                    )
-                    storage.mark_result_notified(int(alert["id"]))
+            # Resultados reais já são enviados pela ponte em blocos de 3.
+            # Aqui apenas encerramos notificações legadas para evitar mensagens
+            # longas, duplicadas ou baseadas em sinais que não viraram aposta.
+            for alert in result_notifications:
+                storage.mark_result_notified(int(alert["id"]))
         return sent
     finally:
         await http.close()
