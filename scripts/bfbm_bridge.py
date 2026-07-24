@@ -24,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 _BETFAIR_ORDERS_CLIENT: Any | None = None
+RESULT_NOTIFICATION_BATCH_SIZE = 3
 
 RICH_COLUMNS = [
     "Provider",
@@ -273,6 +274,26 @@ def _monthly_settlement_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _result_batch_payload(
+    rows: list[dict[str, str]],
+    daily: dict[str, Any],
+    monthly: dict[str, Any],
+) -> dict[str, str]:
+    profits = [_float(str(row.get("profit") or "0"), 0.0) for row in rows]
+    return {
+        "kind": "batch",
+        "batch_count": str(len(rows)),
+        "batch_wins": str(sum(value > 0 for value in profits)),
+        "batch_losses": str(sum(value < 0 for value in profits)),
+        "batch_pushes": str(sum(value == 0 for value in profits)),
+        "batch_profit": f"{sum(profits):.2f}",
+        "day_date": str(daily["date"]),
+        "day_profit": f"{float(daily['profit']):.2f}",
+        "month": str(monthly["month"]),
+        "month_profit": f"{float(monthly['profit']):.2f}",
+    }
+
+
 def _query_betfair_orders(
     *,
     hours: int,
@@ -416,32 +437,20 @@ def settlement_loop(
                     continue
                 label = "GREEN" if profit > 0 else "RED" if profit < 0 else "VOID"
                 print(f"[settlement] {label} betId={bet_id} profit={_brl(profit)} dia={_brl(daily['profit'])}")
-                try:
-                    _post_url(notify_url, item)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[settlement] erro ao notificar Railway: {type(exc).__name__}: {exc}")
-            if state.should_send_periodic_summary(str(daily["date"]), every_days=2):
-                summary = {
-                    "kind": "summary",
-                    "day_date": str(daily["date"]),
-                    "day_count": str(daily["count"]),
-                    "day_wins": str(daily["wins"]),
-                    "day_losses": str(daily["losses"]),
-                    "day_pushes": str(daily["pushes"]),
-                    "day_profit": f"{float(daily['profit']):.2f}",
-                    "month": str(monthly["month"]),
-                    "month_count": str(monthly["count"]),
-                    "month_wins": str(monthly["wins"]),
-                    "month_losses": str(monthly["losses"]),
-                    "month_pushes": str(monthly["pushes"]),
-                    "month_profit": f"{float(monthly['profit']):.2f}",
-                }
+                batch = state.result_notification_batch(RESULT_NOTIFICATION_BATCH_SIZE)
+                if not batch:
+                    continue
+                summary = _result_batch_payload(batch, daily, monthly)
                 try:
                     _post_url(notify_url, summary)
-                    state.mark_periodic_summary_sent(str(daily["date"]))
-                    print(f"[settlement] resumo de 2 dias enviado: dia={_brl(daily['profit'])} mes={_brl(monthly['profit'])}")
+                    state.ack_result_notification_batch(batch)
+                    print(
+                        "[settlement] bloco enviado: "
+                        f"green={summary['batch_wins']} red={summary['batch_losses']} "
+                        f"resultado={_brl(summary['batch_profit'])}"
+                    )
                 except Exception as exc:  # noqa: BLE001
-                    print(f"[settlement] erro ao enviar resumo: {type(exc).__name__}: {exc}")
+                    print(f"[settlement] erro ao enviar bloco: {type(exc).__name__}: {exc}")
         except Exception as exc:  # noqa: BLE001 - settlement monitor must keep running.
             if _is_betfair_auth_error(exc):
                 global _BETFAIR_ORDERS_CLIENT
@@ -628,6 +637,9 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
     row_max = _float(str(row.get("MaxPrice") or row.get("max_price") or max_price), max_price)
     if row_max < row_min:
         row_max = max_price
+    row_price = _float(str(row.get("Price") or row.get("price") or "0"), 0.0)
+    if row_price <= 0:
+        row_price = row_min
     market_name = str(row.get("MarketName") or row.get("market_name") or "Resultado da partida").strip()
     selection, market_name, market_type = _normalize_corner_market(row, selection, market_name, market_type)
     selection_id = _id_value_from(row, "SelectionId", "selection_id", "ID da selecao")
@@ -647,7 +659,7 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
         "BetType": str(row.get("BetType") or row.get("bet_type") or "BACK").upper(),
         "Size": str(row.get("Size") or row.get("stake") or row.get("size") or "1.00").strip(),
         "Points": str(row.get("Points") or row.get("points") or "1").strip(),
-        "Price": str(row.get("Price") or row.get("price") or "0").strip(),
+        "Price": f"{row_price:.2f}",
         "MinPrice": f"{row_min:.2f}",
         "MaxPrice": f"{row_max:.2f}",
         "BSP": str(row.get("BSP") or row.get("bsp") or "False").strip(),
@@ -681,6 +693,7 @@ class BridgeState:
         self.last_source_error: str | None = None
         self.last_bet_notifications: list[dict[str, str]] = []
         self.last_result_notifications: list[dict[str, str]] = []
+        self.pending_result_notifications: list[dict[str, str]] = []
         self.last_periodic_summary_date: str | None = None
         self.result_history_seeded = False
         self.source_history: list[dict[str, Any]] = []
@@ -710,6 +723,9 @@ class BridgeState:
             self.last_source_error = data.get("last_source_error")
             self.last_bet_notifications = [item for item in data.get("last_bet_notifications", []) if isinstance(item, dict)][-20:]
             self.last_result_notifications = [item for item in data.get("last_result_notifications", []) if isinstance(item, dict)][-50:]
+            self.pending_result_notifications = [
+                item for item in data.get("pending_result_notifications", []) if isinstance(item, dict)
+            ][-50:]
             self.last_periodic_summary_date = data.get("last_periodic_summary_date") or None
             self.result_history_seeded = bool(data.get("result_history_seeded"))
             self.source_history = [item for item in data.get("source_history", []) if isinstance(item, dict)][-200:]
@@ -725,6 +741,7 @@ class BridgeState:
                 "last_source_error": self.last_source_error,
                 "last_bet_notifications": self.last_bet_notifications[-20:],
                 "last_result_notifications": self.last_result_notifications[-50:],
+                "pending_result_notifications": self.pending_result_notifications[-50:],
                 "last_periodic_summary_date": self.last_periodic_summary_date,
                 "result_history_seeded": self.result_history_seeded,
                 "source_history": self.source_history[-200:],
@@ -889,11 +906,15 @@ class BridgeState:
                         "market": row.get("MarketName", ""),
                         "selection": row.get("SelectionName", ""),
                         "market_type": row.get("MarketType", ""),
+                        "price": row.get("Price", ""),
+                        "min_price": row.get("MinPrice", ""),
+                        "size": row.get("Size", ""),
                     }
                     for row in self._visible_rows()
                 ],
                 "last_bet_notifications": self.last_bet_notifications[-5:],
                 "last_result_notifications": self.last_result_notifications[-5:],
+                "pending_result_count": len(self.pending_result_notifications),
                 "last_periodic_summary_date": self.last_periodic_summary_date,
                 "result_history_seeded": self.result_history_seeded,
             }
@@ -951,8 +972,26 @@ class BridgeState:
             self.seen_result_bet_ids.add(bet_id)
             self.last_result_notifications.append({"at": _now(), **item})
             self.last_result_notifications = self.last_result_notifications[-50:]
+            self.pending_result_notifications.append(dict(item))
+            self.pending_result_notifications = self.pending_result_notifications[-50:]
         self.save()
         return True
+
+    def result_notification_batch(self, size: int) -> list[dict[str, str]]:
+        with self.lock:
+            if len(self.pending_result_notifications) < size:
+                return []
+            return [dict(item) for item in self.pending_result_notifications[:size]]
+
+    def ack_result_notification_batch(self, rows: list[dict[str, str]]) -> None:
+        bet_ids = {str(row.get("bet_id") or "") for row in rows}
+        with self.lock:
+            self.pending_result_notifications = [
+                row
+                for row in self.pending_result_notifications
+                if str(row.get("bet_id") or "") not in bet_ids
+            ]
+        self.save()
 
     def strategy_for_bet(self, bet_id: str) -> str:
         with self.lock:

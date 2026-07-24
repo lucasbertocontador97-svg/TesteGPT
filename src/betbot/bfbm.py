@@ -351,7 +351,9 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
     if not market or not market.get("SelectionName"):
         return None
     price = _num(alert.get("odd")) or 0.0
-    price_text = f"{price:.2f}" if price > 0 else ""
+    # O BFBM exibe a tip, mas não cria a ordem quando Price chega vazio/zero.
+    # Sem odd na origem, usamos a odd mínima configurada como preço-limite BACK.
+    price_text = f"{price:.2f}" if price > 0 else f"{config.min_price:.2f}"
     is_match_odds = market.get("MarketType") == "MATCH_ODDS"
     stake_text = "1.00" if is_match_odds else f"{config.stake:.2f}"
     market_type_for_handicap = str(
