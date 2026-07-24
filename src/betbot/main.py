@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import logging
@@ -897,8 +898,17 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         return True
 
     def _check_results_api_key(self, settings, parsed) -> bool:
-        if not settings.results_api_key:
-            self.send_error(503, "RESULTS_API_KEY not configured")
+        accepted_keys = [key for key in (settings.results_api_key,) if key]
+        if settings.bfbm_token:
+            accepted_keys.append(
+                hmac.new(
+                    settings.bfbm_token.encode("utf-8"),
+                    b"teste-gpt-results-read-v1",
+                    hashlib.sha256,
+                ).hexdigest()
+            )
+        if not accepted_keys:
+            self.send_error(503, "RESULTS_API_KEY or BFBM_TOKEN not configured")
             return False
         query = parse_qs(parsed.query)
         provided = (
@@ -907,7 +917,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             or query.get("api_key", [""])[0].strip()
             or query.get("token", [""])[0].strip()
         )
-        if not hmac.compare_digest(provided, settings.results_api_key):
+        if not any(hmac.compare_digest(provided, key) for key in accepted_keys):
             self.send_error(401)
             return False
         return True
