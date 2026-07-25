@@ -1523,12 +1523,6 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 matched = float(size_matched.replace(",", ".") or "0") > 0
             except ValueError:
                 matched = False
-            title = "\u2705 APOSTA FEITA" if matched else "\u26a0\ufe0f APOSTA NÃO CASADA"
-            text = (
-                f"{title}\n"
-                f"Valor: R$ {(size_matched or '0').replace('.', ',')}\n"
-                f"Estratégia: {strategy or '-'}"
-            )
             try:
                 storage = Storage(settings.database_path)
                 try:
@@ -1552,9 +1546,8 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 finally:
                     storage.close()
                 if matched and not silent:
-                    require_telegram_settings(settings)
-                    asyncio.run(send_message(settings.telegram_bot_token, settings.telegram_chat_id, text))
-                body = b"sent\n"
+                    logger.info("Aposta BFBM registrada sem alerta Telegram: bet_id=%s strategy=%s", bet_id, strategy)
+                body = b"recorded\n"
                 self.send_response(200)
             except Exception as exc:
                 logger.exception("Erro ao notificar aposta BFBM")
