@@ -18,6 +18,9 @@ class DeterministicSignal:
     strategy: str
 
 
+MIN_MODELED_PROBABILITY = 0.36
+
+
 def _num(value: Any) -> float | None:
     if value is None:
         return None
@@ -390,15 +393,17 @@ def _btts_no_conviction(
 
 
 def _candidate_priority(signal: DeterministicSignal) -> int:
-    if signal.strategy in {"GOAL_OVER_05_HT", "GOAL_OVER_05_FT"}:
-        return 5
-    if signal.strategy == "GOAL_NEXT_LINE_FT":
-        return 4
-    if signal.strategy.startswith("BTTS_"):
+    if signal.market_family == "goals" and signal.selection == "under":
         return 4
     if signal.strategy.startswith("CORNER_"):
+        return 4
+    if signal.market_family == "goals" and signal.selection == "over":
         return 3
-    if signal.strategy.startswith("GOAL_OVER_") or signal.strategy.startswith("GOAL_UNDER_"):
+    if signal.strategy.startswith("BTTS_") or signal.market_family == "btts":
+        return 3
+    if signal.market_family in {"match_odds", "double_chance", "draw_no_bet"}:
+        return 2
+    if signal.strategy.startswith("GOAL_UNDER_"):
         return 2
     return 1
 
@@ -416,6 +421,108 @@ def _candidate_is_available(signal: DeterministicSignal, available_markets: list
         if abs(line - signal.line) <= 0.01:
             return True
     return False
+
+
+def _value_strategy_allowed(
+    signal: DeterministicSignal,
+    *,
+    minute: int,
+    current_goals: int,
+    total_shots: float,
+    shots_on: float,
+    corners: float,
+    pressure: float,
+) -> bool:
+    """Family-neutral gate for the production strategy.
+
+    The bot should not blacklist a market family forever because a past sample
+    was negative. It should reject only when the current live context does not
+    justify the modeled probability. Price/EV is applied later when Betfair/BFBM
+    provides an actual odd for the selection.
+    """
+    family = signal.market_family
+    selection = signal.selection
+    line = signal.line
+
+    if not signal.approved or signal.probability < MIN_MODELED_PROBABILITY:
+        return False
+
+    if family == "goals":
+        if line is None:
+            return False
+        if selection == "under":
+            if not (58 <= minute <= 86) or line <= current_goals:
+                return False
+            if signal.probability < 0.54 or signal.confidence < 64:
+                return False
+            return total_shots <= 18 and shots_on <= 7 and pressure <= 76
+
+        if selection == "over":
+            needed_goals = _needed_over(current_goals, line)
+            if needed_goals <= 0 or not (15 <= minute <= 86):
+                return False
+            if line == 0.5:
+                return (
+                    current_goals == 0
+                    and 16 <= minute <= 82
+                    and (total_shots >= 4 or shots_on >= 1 or pressure >= 28 or corners >= 2)
+                    and signal.probability >= 0.34
+                    and signal.confidence >= 58
+                )
+            if needed_goals >= 3:
+                return (
+                    total_shots >= 14
+                    and shots_on >= 5
+                    and pressure >= 60
+                    and signal.probability >= 0.42
+                    and signal.confidence >= 78
+                )
+            return (
+                ((total_shots >= 5 and shots_on >= 1) or pressure >= 32 or corners >= 3)
+                and signal.confidence >= 58
+            )
+
+    if family == "first_half_goals":
+        return (
+            selection == "over"
+            and line is not None
+            and 15 <= minute <= 39
+            and current_goals == 0
+            and (total_shots >= 5 or shots_on >= 2 or pressure >= 42 or corners >= 2)
+            and signal.probability >= 0.38
+            and signal.confidence >= 64
+        )
+
+    if family == "btts":
+        normalized_selection = str(selection).lower()
+        if normalized_selection in {"yes", "sim"}:
+            return (
+                38 <= minute <= 82
+                and current_goals >= 1
+                and (total_shots >= 8 or shots_on >= 3 or pressure >= 40)
+                and signal.probability >= 0.38
+                and signal.confidence >= 58
+            )
+        if normalized_selection in {"no", "nao", "não"}:
+            return (
+                62 <= minute <= 86
+                and (total_shots <= 12 or shots_on <= 4 or pressure <= 50)
+                and signal.probability >= 0.50
+                and signal.confidence >= 58
+            )
+        return False
+
+    if family == "corners":
+        return (
+            selection == "over"
+            and line is not None
+            and 35 <= minute <= 86
+            and signal.probability >= 0.44
+            and signal.confidence >= 58
+            and (pressure >= 32 or corners >= 3 or total_shots >= 6)
+        )
+
+    return signal.probability >= 0.45 and signal.confidence >= 72
 
 
 def _bfbm_executable_candidates(
@@ -439,7 +546,7 @@ def _bfbm_executable_candidates(
     if available_markets is None:
         return []
 
-    practical_confidence = max(62, min(74, min_confidence - 12))
+    practical_confidence = max(58, min(72, min_confidence - 10))
     candidates: list[DeterministicSignal] = []
 
     goal_lines = _available_lines(
@@ -452,16 +559,17 @@ def _bfbm_executable_candidates(
         for line in goal_lines
         if line >= 0.5 and line <= 8.5 and _needed_over(current_goals, line) == 1
     ]
-    if next_goal_lines and 18 <= minute <= 85 and not dead_game:
+    if next_goal_lines and 16 <= minute <= 86:
         target_line = min(next_goal_lines)
         prob = _poisson_at_least(goal_mean, 1)
         score = round(prob * 100)
         conviction = _next_goal_conviction(score, total_shots, shots_on, corners, pressure)
         flow_ok = (
-            (total_shots >= 7 and shots_on >= 2 and pressure >= 35)
-            or (total_shots >= 10 and pressure >= 28)
-            or (minute >= 55 and (pressure >= 30 or total_shots >= 6 or corners >= 3))
-            or (current_goals == 0 and 18 <= minute <= 25 and (total_shots >= 3 or attacks >= 30))
+            (total_shots >= 5 and shots_on >= 1 and pressure >= 28)
+            or (total_shots >= 8 and pressure >= 24)
+            or (total_shots >= 8 and corners >= 2)
+            or (minute >= 50 and (pressure >= 24 or total_shots >= 5 or corners >= 2))
+            or (current_goals == 0 and 16 <= minute <= 25 and (total_shots >= 2 or attacks >= 24 or corners >= 1))
         )
         if flow_ok and prob >= 0.48:
             conviction = max(conviction, practical_confidence)
@@ -485,13 +593,13 @@ def _bfbm_executable_candidates(
         for line in goal_lines
         if line > current_goals and line <= current_goals + 3.5 and line >= 0.5 and line <= 8.5
     ]
-    if under_lines and 62 <= minute <= 86 and (dead_game or (total_shots <= 10 and shots_on <= 3 and pressure <= 45)):
+    if under_lines and 58 <= minute <= 86 and (dead_game or (total_shots <= 13 and shots_on <= 4 and pressure <= 55)):
         target_line = min(under_lines)
         additional_allowed = max(-1, math.ceil(target_line - current_goals) - 1)
         prob = _poisson_at_most(goal_mean, additional_allowed)
         score = round(prob * 100)
         conviction = _under_goal_conviction(score, minute, total_shots, shots_on, pressure)
-        if prob >= 0.58 and conviction >= max(68, practical_confidence):
+        if prob >= 0.54 and conviction >= max(64, practical_confidence):
             candidates.append(
                 DeterministicSignal(
                     True,
@@ -506,14 +614,14 @@ def _bfbm_executable_candidates(
                 )
             )
 
-    if _has_market_family(available_markets, "btts") and 45 <= minute <= 80:
+    if _has_market_family(available_markets, "btts") and 38 <= minute <= 82:
         both_scored = score_home > 0 and score_away > 0
         one_side_blank = (score_home == 0) != (score_away == 0)
-        if one_side_blank and total_shots >= 10 and shots_on >= 3 and pressure >= 45:
+        if one_side_blank and (total_shots >= 8 or shots_on >= 3 or pressure >= 40):
             prob = _poisson_at_least(goal_mean, 1)
             score = round(prob * 100)
             conviction = _btts_yes_conviction(score, minute, current_goals, total_shots, shots_on, pressure)
-            if prob >= 0.42 and conviction >= practical_confidence:
+            if prob >= 0.38 and conviction >= practical_confidence:
                 candidates.append(
                     DeterministicSignal(
                         True,
@@ -527,11 +635,11 @@ def _bfbm_executable_candidates(
                         "BFBM_EXECUTABLE_BTTS_YES",
                     )
                 )
-        if not both_scored and minute >= 68 and total_shots <= 9 and shots_on <= 3 and pressure <= 42:
+        if not both_scored and minute >= 62 and total_shots <= 12 and shots_on <= 4 and pressure <= 50:
             prob = _poisson_at_most(goal_mean, 0)
             score = round(prob * 100)
             conviction = _btts_no_conviction(score, minute, total_shots, shots_on, pressure)
-            if prob >= 0.56 and conviction >= practical_confidence:
+            if prob >= 0.50 and conviction >= practical_confidence:
                 candidates.append(
                     DeterministicSignal(
                         True,
@@ -552,7 +660,7 @@ def _bfbm_executable_candidates(
         tuple(float(value) + 0.5 for value in range(max(0, int(corners) - 1), min(16, int(corners) + 4))),
     )
     viable_corner_lines = [line for line in corner_lines if line > corners and line <= corners + 2.5]
-    if viable_corner_lines and 37 <= minute <= 85 and (pressure >= 38 or total_shots >= 8 or corners >= 4):
+    if viable_corner_lines and 35 <= minute <= 86 and (pressure >= 32 or total_shots >= 6 or corners >= 3):
         target_line = min(viable_corner_lines)
         needed_corners = _needed_over(int(corners), target_line)
         corner_mean = _corner_lambda(minute, corners, total_shots, pressure)
@@ -566,7 +674,7 @@ def _bfbm_executable_candidates(
             shots_on=shots_on,
             pressure=pressure,
         )
-        if prob >= 0.50 and conviction >= practical_confidence:
+        if prob >= 0.44 and conviction >= practical_confidence:
             candidates.append(
                 DeterministicSignal(
                     True,
@@ -581,7 +689,20 @@ def _bfbm_executable_candidates(
                 )
             )
 
-    return [candidate for candidate in candidates if _candidate_is_available(candidate, available_markets)]
+    return [
+        candidate
+        for candidate in candidates
+        if _candidate_is_available(candidate, available_markets)
+        and _value_strategy_allowed(
+            candidate,
+            minute=minute,
+            current_goals=current_goals,
+            total_shots=total_shots,
+            shots_on=shots_on,
+            corners=corners,
+            pressure=pressure,
+        )
+    ]
 
 
 def evaluate_game(
@@ -821,10 +942,23 @@ def evaluate_game(
                 )
             )
 
-    available_candidates = [
+    raw_available_candidates = [
         candidate
         for candidate in candidates
         if _candidate_is_available(candidate, available_markets)
+    ]
+    available_candidates = [
+        candidate
+        for candidate in raw_available_candidates
+        if _value_strategy_allowed(
+            candidate,
+            minute=minute,
+            current_goals=current_goals,
+            total_shots=total_shots,
+            shots_on=shots_on,
+            corners=corners,
+            pressure=pressure,
+        )
     ]
     if not available_candidates:
         executable_candidates = _bfbm_executable_candidates(
@@ -861,6 +995,19 @@ def evaluate_game(
             0,
             f"Nenhum mercado passou nos thresholds matematicos. Chutes {total_shots:g}, no gol {shots_on:g}, escanteios {corners:g}, {pressure_label}.",
             "no_signal",
+        )
+
+    if raw_available_candidates and not available_candidates:
+        return DeterministicSignal(
+            False,
+            "none",
+            "none",
+            None,
+            0,
+            0,
+            0,
+            "Sinais encontrados, mas sem valor/contexto suficiente para entrada pela estrategia multi-mercado.",
+            "value_context_filter",
         )
 
     if not available_candidates:

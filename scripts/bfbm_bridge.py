@@ -468,7 +468,7 @@ def _csv_text(rows: list[dict[str, str]]) -> str:
     from io import StringIO
 
     buffer = StringIO(newline="")
-    writer = csv.DictWriter(buffer, fieldnames=RICH_COLUMNS, extrasaction="ignore", quoting=csv.QUOTE_ALL)
+    writer = csv.DictWriter(buffer, fieldnames=RICH_COLUMNS, extrasaction="ignore", quoting=csv.QUOTE_MINIMAL)
     writer.writeheader()
     for row in rows:
         normalized = {column: str(row.get(column, "") or "") for column in RICH_COLUMNS}

@@ -346,6 +346,16 @@ def bfbm_available_market_specs(catalog_rows: list[dict], event_name: str, min_s
     return specs
 
 
+def _bfbm_required_confidence(settings: Settings, game: GameSnapshot) -> int:
+    """Use a practical threshold only when Betfair already has the market loaded."""
+    required = min(settings.min_confidence, 74)
+    if is_high_variance_match(game.league, game.home, game.away):
+        required = max(required, 76)
+    if game.minute is not None and game.minute < 25:
+        required = max(required, 72)
+    return min(required, 78)
+
+
 def _tc_int(match: dict, key: str, default: int = 0) -> int:
     try:
         return int(match.get(key) if match.get(key) is not None else default)
@@ -533,7 +543,7 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
             score_away=_tc_int(match, "ag"),
             stats=stats,
             min_confidence=settings.min_confidence,
-            available_markets=bfbm_available_market_specs(active_catalog, event_label, 75),
+            available_markets=bfbm_available_market_specs(active_catalog, event_label, 55),
         )
         item["signal"] = {
             "approved": signal.approved,
@@ -750,20 +760,26 @@ async def build_live_bfbm_candidate_alerts(settings, limit: int = 12) -> list[di
             if len(candidates) >= limit:
                 break
             event_label = f"{game.home} x {game.away}"
-            required_confidence = settings.min_confidence
-            if is_high_variance_match(game.home, game.away, game.league):
-                required_confidence = max(required_confidence, 85)
-            if game.minute is not None and game.minute < 25:
-                required_confidence = max(required_confidence, 85)
-            available_markets = bfbm_available_market_specs(active_catalog, event_label, min_score=75)
+            required_confidence = _bfbm_required_confidence(settings, game)
+            available_markets = bfbm_available_market_specs(active_catalog, event_label, min_score=55)
             if not available_markets:
                 continue
             signal = evaluate_game(
-                game,
+                minute=game.minute,
+                score_home=game.score_home,
+                score_away=game.score_away,
+                stats=game.stats,
                 min_confidence=required_confidence,
                 available_markets=available_markets,
             )
             if not getattr(signal, "approved", False):
+                _record_bfbm_candidate_audit(
+                    storage,
+                    game,
+                    signal,
+                    status="SKIPPED",
+                    reason=f"live_csv_math_blocked:{getattr(signal, 'strategy', 'blocked')}",
+                )
                 continue
             bfbm_market = find_bfbm_market(
                 active_catalog,
@@ -2284,11 +2300,12 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                 if bfbm_source
                 else None
             )
-            required_confidence = settings.min_confidence
-            if is_high_variance_match(game.league, game.home, game.away):
-                required_confidence = max(required_confidence, 85)
-            if game.minute is not None and game.minute < 25:
-                required_confidence = max(required_confidence, 85)
+            required_confidence = _bfbm_required_confidence(settings, game) if bfbm_source else settings.min_confidence
+            if not bfbm_source:
+                if is_high_variance_match(game.league, game.home, game.away):
+                    required_confidence = max(required_confidence, 85)
+                if game.minute is not None and game.minute < 25:
+                    required_confidence = max(required_confidence, 85)
             math_signal = evaluate_game(
                 minute=game.minute,
                 score_home=game.score_home,

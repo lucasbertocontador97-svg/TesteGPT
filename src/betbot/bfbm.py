@@ -422,6 +422,24 @@ def _runner_handicap(runner: dict[str, Any]) -> float | None:
     return market_line(_runner_name(runner))
 
 
+def _runner_price(runner: dict[str, Any]) -> float | None:
+    for key in ("bestBackPrice", "best_back_price", "back", "lastPriceTraded", "last_price_traded"):
+        value = runner.get(key)
+        price = _num(value)
+        if price is not None and price > 1:
+            return price
+    exchange = runner.get("ex")
+    if isinstance(exchange, dict):
+        available = exchange.get("availableToBack") or exchange.get("available_to_back") or []
+        if isinstance(available, list) and available:
+            first = available[0]
+            if isinstance(first, dict):
+                price = _num(first.get("price"))
+                if price is not None and price > 1:
+                    return price
+    return None
+
+
 def _desired_line(row: dict[str, str], market: dict[str, Any]) -> float | None:
     return (
         market_line(str(market.get("market_name") or market.get("MarketName") or ""))
@@ -663,6 +681,9 @@ def enrich_row_from_bfbm_catalog(row: dict[str, str], catalog_rows: list[dict[st
     runner = _runner_for_catalog_market(enriched, match)
     if runner:
         enriched["SelectionId"] = _runner_selection_id(runner) or str(enriched.get("SelectionId", "0") or "0")
+        runner_price = _runner_price(runner)
+        if runner_price is not None:
+            enriched["Price"] = f"{runner_price:.2f}"
         runner_handicap = _runner_handicap(runner)
         if runner_handicap not in (None, 0.0):
             enriched["Handicap"] = _handicap_text(runner_handicap)
