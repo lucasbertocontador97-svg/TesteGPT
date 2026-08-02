@@ -50,6 +50,7 @@ class Storage:
                 betfair_event_id text,
                 betfair_start_time text,
                 strategy text,
+                analysis_json text,
                 bfbm_bet_id text,
                 bfbm_bet_placed_at text,
                 result_notified_at datetime
@@ -139,6 +140,7 @@ class Storage:
             "betfair_event_id",
             "betfair_start_time",
             "strategy",
+            "analysis_json",
             "bfbm_bet_id",
             "bfbm_bet_placed_at",
             "result_notified_at",
@@ -585,8 +587,8 @@ class Storage:
             """
             insert or ignore into alerts (
                 event_id, fixture_id, home, away, minute, market, selection, bookmaker,
-                odd, line, confidence, reason, stake, alert_key, strategy
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                odd, line, confidence, reason, stake, alert_key, strategy, analysis_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 game.event_id,
@@ -604,6 +606,7 @@ class Storage:
                 decision.stake,
                 decision.alert_key,
                 decision.strategy,
+                json.dumps(decision.analysis or {}, ensure_ascii=False),
             ),
         )
         self.conn.commit()
@@ -614,8 +617,8 @@ class Storage:
             """
             insert or ignore into alerts (
                 event_id, fixture_id, home, away, minute, market, selection, bookmaker,
-                odd, line, confidence, reason, stake, alert_key, strategy
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                odd, line, confidence, reason, stake, alert_key, strategy, analysis_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 game.event_id,
@@ -633,6 +636,7 @@ class Storage:
                 decision.stake,
                 decision.alert_key,
                 decision.strategy,
+                json.dumps(decision.analysis or {}, ensure_ascii=False),
             ),
         )
         self.conn.commit()

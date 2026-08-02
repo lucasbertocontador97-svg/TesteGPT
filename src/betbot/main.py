@@ -38,7 +38,7 @@ from .markets import flatten_all_markets, flatten_markets, market_matches_idea
 from .matching import find_matching_odds_event, find_matching_sportmonks_fixture, find_matching_thestatsapi_match, find_matching_totalcorner_match, sportmonks_participant_names
 from .models import Decision, GameSnapshot
 from .settlement import settle_alert
-from .stats import compact_player_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, compact_thestatsapi_statistics, compact_totalcorner_statistics, extract_minute, extract_score, has_actionable_stats, is_blocked_match_type, is_high_variance_match
+from .stats import compact_player_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, compact_thestatsapi_statistics, compact_totalcorner_statistics, extract_minute, extract_score, has_actionable_stats, is_blocked_match_type, is_high_variance_match, stats_value, total_stat
 from .storage import Storage
 from .telegram_io import alert_keyboard, format_alert, send_message
 
@@ -64,6 +64,100 @@ MARKET_LABELS = {
 
 def market_label(market_family: str, selection: str) -> str:
     return MARKET_LABELS.get((market_family, selection), f"{market_family} {selection}")
+
+
+def _now_sao_paulo_iso() -> str:
+    try:
+        return datetime.now(ZoneInfo("America/Sao_Paulo")).isoformat(timespec="seconds")
+    except Exception:
+        return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+
+def _team_analysis_stats(stats: dict[str, Any], team: str) -> dict[str, Any]:
+    return {
+        "possession": stats_value(stats, team, ("Ball Possession",)),
+        "total_shots": stats_value(stats, team, ("Total Shots",)),
+        "shots_on_goal": stats_value(stats, team, ("Shots on Goal", "Shots on target")),
+        "shots_off_goal": stats_value(stats, team, ("Shots off Goal", "Shots off target")),
+        "corners": stats_value(stats, team, ("Corner Kicks", "Corners")),
+        "attacks": stats_value(stats, team, ("Attacks",)),
+        "dangerous_attacks": stats_value(stats, team, ("Dangerous Attacks",)),
+    }
+
+
+def _analysis_pressure_label(dangerous: float, attacks: float, total_shots: float, shots_on: float) -> tuple[float, str]:
+    if dangerous > 0:
+        return dangerous, f"ataques perigosos {dangerous:g}"
+    estimated = min(80.0, attacks * 0.35 + total_shots * 1.8 + shots_on * 3.0)
+    return estimated, f"pressao estimada {estimated:g} por ataques {attacks:g}, chutes {total_shots:g}, no gol {shots_on:g}"
+
+
+def _live_analysis_payload(
+    game: GameSnapshot,
+    signal,
+    *,
+    required_confidence: int | None = None,
+    bfbm_market: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    total_shots = float(total_stat(game.stats, ("Total Shots",)) or 0)
+    shots_on = float(total_stat(game.stats, ("Shots on Goal", "Shots on target")) or 0)
+    corners = float(total_stat(game.stats, ("Corner Kicks", "Corners")) or 0)
+    attacks = float(total_stat(game.stats, ("Attacks",)) or 0)
+    dangerous = float(total_stat(game.stats, ("Dangerous Attacks",)) or 0)
+    pressure, pressure_label = _analysis_pressure_label(dangerous, attacks, total_shots, shots_on)
+    score_home = game.score_home if game.score_home is not None else 0
+    score_away = game.score_away if game.score_away is not None else 0
+    source = "bfbm_betfair_totalcorner" if str(game.event_id or "").startswith("tc-bfbm-") else "api_football_totalcorner_odds"
+    available_market = None
+    if bfbm_market:
+        available_market = {
+            "event_id": bfbm_market.get("event_id"),
+            "market_id": bfbm_market.get("market_id"),
+            "market_name": bfbm_market.get("market_name"),
+            "market_type": bfbm_market.get("market_type"),
+            "status": bfbm_market.get("status"),
+            "start_time": bfbm_market.get("start_time"),
+        }
+    return {
+        "source": source,
+        "data_quality": "actionable_stats" if has_actionable_stats(game.stats) else "partial_stats",
+        "captured_at": _now_sao_paulo_iso(),
+        "game": {
+            "event_id": game.event_id,
+            "fixture_id": game.fixture_id,
+            "league": game.league,
+            "home": game.home,
+            "away": game.away,
+            "minute": game.minute,
+            "score_home": score_home,
+            "score_away": score_away,
+            "score": f"{score_home}x{score_away}",
+        },
+        "team_stats": {team: _team_analysis_stats(game.stats, team) for team in game.stats.keys()},
+        "totals": {
+            "total_shots": total_shots,
+            "shots_on_goal": shots_on,
+            "corners": corners,
+            "attacks": attacks,
+            "dangerous_attacks": dangerous,
+            "pressure": pressure,
+            "pressure_label": pressure_label,
+        },
+        "decision": {
+            "approved": bool(getattr(signal, "approved", False)),
+            "strategy": getattr(signal, "strategy", ""),
+            "market_family": getattr(signal, "market_family", ""),
+            "selection": getattr(signal, "selection", ""),
+            "line": getattr(signal, "line", None),
+            "probability": getattr(signal, "probability", None),
+            "confidence": getattr(signal, "confidence", None),
+            "score": getattr(signal, "score", None),
+            "required_confidence": required_confidence,
+            "reason": getattr(signal, "reason", ""),
+        },
+        "available_bfbm_market": available_market,
+        "stats_summary": compact_stats_summary(game.stats),
+    }
 
 
 def _record_bfbm_candidate_audit(
@@ -110,6 +204,7 @@ def _record_bfbm_candidate_audit(
                     "strategy": strategy,
                     "probability": getattr(signal, "probability", 0),
                     "confidence": getattr(signal, "confidence", 0),
+                    "live_analysis": _live_analysis_payload(game, signal, bfbm_market=bfbm_market),
                 },
             }
         ]
@@ -648,9 +743,21 @@ def _live_bfbm_alert_key(game: GameSnapshot, signal) -> str:
     )
 
 
-def _alert_dict_from_live_bfbm_signal(game: GameSnapshot, signal) -> dict[str, Any]:
+def _alert_dict_from_live_bfbm_signal(
+    game: GameSnapshot,
+    signal,
+    *,
+    required_confidence: int | None = None,
+    bfbm_market: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     family = getattr(signal, "market_family", "")
     selection = getattr(signal, "selection", "")
+    analysis = _live_analysis_payload(
+        game,
+        signal,
+        required_confidence=required_confidence,
+        bfbm_market=bfbm_market,
+    )
     return {
         "id": None,
         "event_id": game.event_id,
@@ -670,6 +777,7 @@ def _alert_dict_from_live_bfbm_signal(game: GameSnapshot, signal) -> dict[str, A
         "stake": "baixa",
         "alert_key": _live_bfbm_alert_key(game, signal),
         "strategy": getattr(signal, "strategy", ""),
+        "analysis_json": json.dumps(analysis, ensure_ascii=False),
         "status": "SENT",
         "user_action": "PENDING",
     }
@@ -796,7 +904,16 @@ async def build_live_bfbm_candidate_alerts(settings, limit: int = 12) -> list[di
                     reason="live_csv_approved_without_exact_bfbm_market",
                 )
                 continue
-            alert = _with_bfbm_export_ids(_alert_dict_from_live_bfbm_signal(game, signal), settings, bfbm_market)
+            alert = _with_bfbm_export_ids(
+                _alert_dict_from_live_bfbm_signal(
+                    game,
+                    signal,
+                    required_confidence=required_confidence,
+                    bfbm_market=bfbm_market,
+                ),
+                settings,
+                bfbm_market,
+            )
             _record_bfbm_candidate_audit(
                 storage,
                 game,
@@ -1192,6 +1309,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/create-live-00-goals",
             "/bfbm/markets.json",
             "/bfbm/aliases.json",
+            "/bfbm/analysis.json",
             "/bfbm/live-overlap.json",
             "/bfbm/strategy-report.json",
             "/bfbm/export-audit.json",
@@ -1361,6 +1479,38 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             self.send_error(404, "BFBM export disabled")
             return
         if not self._check_bfbm_token(settings, parsed):
+            return
+        if parsed.path == "/bfbm/analysis.json":
+            query = parse_qs(parsed.query)
+            try:
+                limit = int(query.get("limit", ["20"])[0])
+            except ValueError:
+                limit = 20
+            storage = Storage(settings.database_path)
+            try:
+                alerts = storage.last_alerts(limit=max(1, min(100, limit)))
+            finally:
+                storage.close()
+            for alert in alerts:
+                raw_analysis = alert.get("analysis_json")
+                if isinstance(raw_analysis, str) and raw_analysis:
+                    try:
+                        alert["analysis"] = json.loads(raw_analysis)
+                    except json.JSONDecodeError:
+                        alert["analysis"] = None
+                else:
+                    alert["analysis"] = None
+                alert.pop("analysis_json", None)
+            self._write_json_response(
+                200,
+                {
+                    "ok": True,
+                    "source": "teste_gpt_tip_live_analysis",
+                    "count": len(alerts),
+                    "generated_at": self._sao_paulo_now().isoformat(),
+                    "alerts": alerts,
+                },
+            )
             return
         if parsed.path == "/bfbm/markets.json":
             storage = Storage(settings.database_path)
@@ -2379,6 +2529,22 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     game.away,
                     idea.reason,
                 )
+            decision_analysis = _live_analysis_payload(
+                game,
+                math_signal,
+                required_confidence=required_confidence,
+                bfbm_market=bfbm_market if bfbm_source else None,
+            )
+            decision_analysis["final_decision"] = {
+                "market_family": target_family,
+                "selection": target_selection,
+                "line": target_line,
+                "confidence": target_confidence,
+                "stake": target_stake,
+                "reason": target_reason,
+                "ai_checked": bool(idea.should_check_odds),
+                "ai_reason": idea.reason,
+            }
             odds_payload = None
             if game.event_id and not bfbm_source:
                 odds_payload = odds_payloads.get(game.event_id)
@@ -2407,6 +2573,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     alert_key,
                     market_status=totalcorner_market_status(game.totalcorner_match, target_family),
                     strategy=math_signal.strategy,
+                    analysis=decision_analysis,
                 )
             else:
                 chosen = sorted(compatible, key=lambda market: market.odd, reverse=True)[0]
@@ -2427,6 +2594,17 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     odds_alert_key(game, target_family, target_selection, chosen.line or target_line),
                     bookmaker_links,
                     strategy=math_signal.strategy,
+                    analysis={
+                        **decision_analysis,
+                        "final_odd": {
+                            "bookmaker": chosen.bookmaker,
+                            "market": chosen.market_name,
+                            "selection": chosen.selection,
+                            "odd": chosen.odd,
+                            "line": chosen.line or target_line,
+                            "links": bookmaker_links,
+                        },
+                    },
                 )
             if storage.seen_alert(decision.alert_key):
                 logger.info("Entrada repetida ignorada: %s", decision.alert_key)
