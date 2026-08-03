@@ -638,6 +638,8 @@ def _normalize_row(row: dict[str, Any], *, min_price: float, max_price: float) -
     if row_max < row_min:
         row_max = max_price
     row_price = _float(str(row.get("Price") or row.get("price") or "0"), 0.0)
+    if row_price > 0 and (row_price < row_min or row_price > row_max):
+        return None
     if row_price <= 0:
         row_price = row_min
     market_name = str(row.get("MarketName") or row.get("market_name") or "Resultado da partida").strip()

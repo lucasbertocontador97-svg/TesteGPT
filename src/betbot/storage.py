@@ -1,12 +1,53 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .bfbm_markets import normalize_event
+from .bfbm_markets import normalize_event, normalize_text
 from .models import Decision, GameSnapshot
+
+
+def _parse_bfbm_raw_line(raw_line: Any) -> tuple[str, str, str]:
+    text = str(raw_line or "").strip()
+    if not text:
+        return "", "", ""
+    parts = [part.strip() for part in text.split("\\") if part.strip()]
+    if not parts:
+        return "", "", ""
+    event = re.sub(r"^\d{1,2}:\d{2}\s+", "", parts[0]).strip()
+    market = parts[1] if len(parts) > 1 else ""
+    selection = parts[2] if len(parts) > 2 else ""
+    return event, market, selection
+
+
+def _learning_market_family(market: Any, selection: Any = "") -> str:
+    market_text = normalize_text(str(market or ""))
+    selection_text = normalize_text(str(selection or ""))
+    combined = f"{market_text} {selection_text}".strip()
+    if "ambos os times" in combined or "both teams" in combined or "btts" in combined:
+        return "btts"
+    if "escante" in combined or "corner" in combined or "cornr" in combined:
+        return "corners"
+    if (
+        "gol" in combined
+        or "goal" in combined
+        or "mais menos" in combined
+        or "over under" in combined
+        or "linhas de gol" in combined
+    ):
+        return "goals"
+    if "resultado da partida" in combined or "match odds" in combined:
+        return "match_odds"
+    if "chance dupla" in combined or "double chance" in combined:
+        return "double_chance"
+    if "draw no bet" in combined or "empate anula" in combined:
+        return "draw_no_bet"
+    if "handicap" in combined:
+        return "handicap"
+    return "other"
 
 
 class Storage:
@@ -1014,6 +1055,7 @@ class Storage:
                 coalesce(a.status, '') as alert_status,
                 coalesce(a.user_action, '') as user_action,
                 coalesce(a.result_note, '') as result_note
+                ,coalesce(b.raw_line, '') as raw_line
             from bfbm_bet_notifications b
             left join alerts a
               on a.id = b.alert_id
@@ -1028,6 +1070,13 @@ class Storage:
         result_rows: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
+            parsed_event, parsed_market, parsed_selection = _parse_bfbm_raw_line(item.get("raw_line"))
+            if not item.get("event_name"):
+                item["event_name"] = parsed_event
+            if not item.get("market"):
+                item["market"] = parsed_market
+            if not item.get("selection"):
+                item["selection"] = parsed_selection
             profit = self._money_float(item.get("profit"))
             stake = self._money_float(item.get("stake"))
             price = self._money_float(item.get("price"))
@@ -1085,6 +1134,242 @@ class Storage:
             "roi_percent": round(profit / staked * 100, 2) if staked else 0.0,
             "win_rate_percent": round(green / (green + red) * 100, 2) if green + red else 0.0,
             "by_strategy": strategy_rows,
+        }
+
+    def _learning_add_bucket(
+        self,
+        buckets: dict[str, dict[str, Any]],
+        key: str,
+        *,
+        label: str,
+        bucket_type: str,
+        row: dict[str, Any],
+        family: str,
+    ) -> None:
+        bucket = buckets.setdefault(
+            key,
+            {
+                "key": key,
+                "label": label,
+                "type": bucket_type,
+                "family": family,
+                "bets": 0,
+                "green": 0,
+                "red": 0,
+                "void": 0,
+                "profit": 0.0,
+                "staked": 0.0,
+                "price_sum": 0.0,
+                "price_count": 0,
+            },
+        )
+        result = str(row.get("result") or "").upper()
+        stake = self._money_float(row.get("stake"))
+        profit = self._money_float(row.get("profit"))
+        price = self._money_float(row.get("price"))
+        bucket["bets"] += 1
+        if result == "GREEN":
+            bucket["green"] += 1
+        elif result == "RED":
+            bucket["red"] += 1
+        else:
+            bucket["void"] += 1
+        bucket["profit"] += profit
+        bucket["staked"] += stake
+        if price:
+            bucket["price_sum"] += price
+            bucket["price_count"] += 1
+
+    def _learning_finalize_bucket(self, bucket: dict[str, Any]) -> dict[str, Any]:
+        decided = int(bucket.get("green", 0)) + int(bucket.get("red", 0))
+        staked = self._money_float(bucket.get("staked"))
+        profit = self._money_float(bucket.get("profit"))
+        price_count = int(bucket.get("price_count", 0) or 0)
+        item = dict(bucket)
+        item["profit"] = round(profit, 2)
+        item["staked"] = round(staked, 2)
+        item["roi_percent"] = round(profit / staked * 100, 2) if staked else 0.0
+        item["win_rate_percent"] = round(item.get("green", 0) / decided * 100, 2) if decided else 0.0
+        item["avg_price"] = round(self._money_float(item.get("price_sum")) / price_count, 3) if price_count else 0.0
+        item.pop("price_sum", None)
+        item.pop("price_count", None)
+        return item
+
+    def bfbm_learning_profile(self, limit: int = 5000) -> dict[str, Any]:
+        rows = self._bfbm_result_rows("1 = 1", (), limit=max(50, limit))
+        usable_rows = [
+            row
+            for row in rows
+            if self._money_float(row.get("stake")) > 0 and str(row.get("result") or "").upper() in {"GREEN", "RED"}
+        ]
+        buckets: dict[str, dict[str, Any]] = {}
+        for row in usable_rows:
+            market = str(row.get("market") or "").strip()
+            selection = str(row.get("selection") or "").strip()
+            strategy = str(row.get("strategy") or "").strip()
+            family = _learning_market_family(market, selection)
+            market_key = normalize_text(market)
+            selection_key = normalize_text(selection)
+            self._learning_add_bucket(
+                buckets,
+                f"family:{family}",
+                label=family,
+                bucket_type="family",
+                row=row,
+                family=family,
+            )
+            if market_key:
+                self._learning_add_bucket(
+                    buckets,
+                    f"market:{market_key}",
+                    label=market,
+                    bucket_type="market",
+                    row=row,
+                    family=family,
+                )
+            if market_key and selection_key:
+                self._learning_add_bucket(
+                    buckets,
+                    f"market_selection:{market_key}|{selection_key}",
+                    label=f"{market} / {selection}",
+                    bucket_type="market_selection",
+                    row=row,
+                    family=family,
+                )
+            if strategy:
+                self._learning_add_bucket(
+                    buckets,
+                    f"strategy:{normalize_text(strategy)}",
+                    label=strategy,
+                    bucket_type="strategy",
+                    row=row,
+                    family=family,
+                )
+        finalized = [self._learning_finalize_bucket(bucket) for bucket in buckets.values()]
+        finalized.sort(key=lambda item: (item["roi_percent"], item["bets"], item["profit"]))
+        by_type: dict[str, list[dict[str, Any]]] = {}
+        for item in finalized:
+            by_type.setdefault(str(item["type"]), []).append(item)
+        risk_rules = [
+            item
+            for item in finalized
+            if item["bets"] >= 5
+            and (
+                item["roi_percent"] <= -12
+                or (item["bets"] >= 8 and item["win_rate_percent"] <= 42 and item["profit"] < 0)
+            )
+        ]
+        boost_rules = [
+            item
+            for item in finalized
+            if item["bets"] >= 5 and item["roi_percent"] >= 10 and item["profit"] > 0
+        ]
+        return {
+            "bets_considered": len(usable_rows),
+            "summary": self._summarize_bfbm_results(usable_rows),
+            "risk_rules": risk_rules[:30],
+            "boost_rules": sorted(boost_rules, key=lambda item: (item["roi_percent"], item["bets"]), reverse=True)[:30],
+            "by_family": by_type.get("family", []),
+            "by_market": by_type.get("market", []),
+            "by_market_selection": by_type.get("market_selection", []),
+            "by_strategy": by_type.get("strategy", []),
+        }
+
+    def bfbm_learning_decision(
+        self,
+        market: str,
+        selection: str,
+        strategy: str = "",
+        *,
+        min_exact_bets: int = 5,
+        min_market_bets: int = 7,
+        min_family_bets: int = 12,
+    ) -> dict[str, Any]:
+        family = _learning_market_family(market, selection)
+        market_key = normalize_text(market)
+        selection_key = normalize_text(selection)
+        strategy_key = normalize_text(strategy)
+        profile = self.bfbm_learning_profile(limit=5000)
+        buckets_by_key = {
+            item["key"]: item
+            for group in (
+                profile.get("by_market_selection", []),
+                profile.get("by_market", []),
+                profile.get("by_family", []),
+                profile.get("by_strategy", []),
+            )
+            for item in group
+        }
+        candidates = [
+            ("exact", buckets_by_key.get(f"market_selection:{market_key}|{selection_key}"), min_exact_bets),
+            ("market", buckets_by_key.get(f"market:{market_key}"), min_market_bets),
+            ("family", buckets_by_key.get(f"family:{family}"), min_family_bets),
+        ]
+        strategy_stats = buckets_by_key.get(f"strategy:{strategy_key}") if strategy_key else None
+        if strategy_key:
+            candidates_for_audit = [*candidates, ("strategy", strategy_stats, min_market_bets)]
+        else:
+            candidates_for_audit = candidates
+
+        evaluated = [
+            {"scope": scope, "minimum_bets": minimum, "stats": stats}
+            for scope, stats, minimum in candidates_for_audit
+            if stats
+        ]
+        for scope, stats, minimum in candidates:
+            if not stats or int(stats.get("bets", 0)) < minimum:
+                continue
+            roi = self._money_float(stats.get("roi_percent"))
+            win_rate = self._money_float(stats.get("win_rate_percent"))
+            profit = self._money_float(stats.get("profit"))
+            bets = int(stats.get("bets", 0))
+            if (
+                roi <= -25
+                or (bets >= max(minimum, 8) and roi <= -15 and win_rate <= 44)
+                or (bets >= max(minimum, 10) and profit <= -20 and roi < 0)
+            ):
+                return {
+                    "action": "BLOCK",
+                    "reason": (
+                        f"bloqueado por aprendizado: {scope} {stats.get('label')} "
+                        f"com {bets} apostas, ROI {roi:.2f}% e win rate {win_rate:.2f}%"
+                    ),
+                    "matched_scope": scope,
+                    "matched_rule": stats,
+                    "evaluated": evaluated,
+                    "profile_bets": profile.get("bets_considered", 0),
+                }
+            if roi <= -10 or (win_rate <= 42 and profit < 0):
+                return {
+                    "action": "CAUTION",
+                    "reason": (
+                        f"cautela por aprendizado: {scope} {stats.get('label')} "
+                        f"com {bets} apostas, ROI {roi:.2f}%"
+                    ),
+                    "matched_scope": scope,
+                    "matched_rule": stats,
+                    "evaluated": evaluated,
+                    "profile_bets": profile.get("bets_considered", 0),
+                }
+            if roi >= 10 and win_rate >= 48 and profit > 0:
+                return {
+                    "action": "BOOST",
+                    "reason": (
+                        f"historico favoravel: {scope} {stats.get('label')} "
+                        f"com {bets} apostas, ROI {roi:.2f}%"
+                    ),
+                    "matched_scope": scope,
+                    "matched_rule": stats,
+                    "evaluated": evaluated,
+                    "profile_bets": profile.get("bets_considered", 0),
+                }
+        return {
+            "action": "ALLOW",
+            "reason": "sem amostra negativa suficiente para bloquear",
+            "matched_scope": "",
+            "matched_rule": None,
+            "evaluated": evaluated,
+            "profile_bets": profile.get("bets_considered", 0),
         }
 
     def bfbm_results_for_day(self, day: str, limit: int = 500) -> dict[str, Any]:

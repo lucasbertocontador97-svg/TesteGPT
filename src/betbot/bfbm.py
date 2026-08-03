@@ -401,6 +401,15 @@ def _catalog_raw(market: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _row_price_in_range(row: dict[str, str], config: BfbmConfig) -> bool:
+    price = _num(row.get("Price"))
+    if not price or price <= 0:
+        return True
+    min_price = _num(row.get("MinPrice")) or config.min_price
+    max_price = _num(row.get("MaxPrice")) or config.max_price
+    return min_price <= price <= max_price
+
+
 def _catalog_runners(market: dict[str, Any]) -> list[dict[str, Any]]:
     raw = _catalog_raw(market)
     runners = raw.get("runners") or market.get("runners") or []
@@ -760,6 +769,9 @@ def full_rows_with_audit(
             matched = enrich_row_from_bfbm_catalog(row, catalog_rows)
             if not matched:
                 if allow_name_fallback and _has_matchable_names(row):
+                    if not _row_price_in_range(row, config):
+                        audits.append(_audit_row(alert, endpoint, "SKIPPED", "price_outside_configured_range", row))
+                        continue
                     rows.append(row)
                     audits.append(_audit_row(alert, endpoint, "EXPORTED", "exported_without_catalog_match_bfbm_may_fill", row))
                     continue
@@ -768,10 +780,16 @@ def full_rows_with_audit(
             row = matched
         if not _has_valid_export_ids(row):
             if allow_name_fallback and _has_matchable_names(row):
+                if not _row_price_in_range(row, config):
+                    audits.append(_audit_row(alert, endpoint, "SKIPPED", "price_outside_configured_range", row))
+                    continue
                 rows.append(row)
                 audits.append(_audit_row(alert, endpoint, "EXPORTED", "exported_without_ids_bfbm_may_fill", row))
                 continue
             audits.append(_audit_row(alert, endpoint, "SKIPPED", "missing_required_bfbm_ids", row))
+            continue
+        if not _row_price_in_range(row, config):
+            audits.append(_audit_row(alert, endpoint, "SKIPPED", "price_outside_configured_range", row))
             continue
         rows.append(row)
         selection_id = str(row.get("SelectionId") or "").strip()

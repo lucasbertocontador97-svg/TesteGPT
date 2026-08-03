@@ -808,6 +808,23 @@ def _with_bfbm_export_ids(alert: dict[str, Any], settings, bfbm_market: dict | N
     return enriched_alert
 
 
+def _with_learning_analysis(alert: dict[str, Any], learning: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(alert)
+    try:
+        analysis = json.loads(str(enriched.get("analysis_json") or "{}"))
+        if not isinstance(analysis, dict):
+            analysis = {}
+    except json.JSONDecodeError:
+        analysis = {}
+    analysis["learning"] = learning
+    enriched["analysis_json"] = json.dumps(analysis, ensure_ascii=False)
+    if learning.get("action") == "BOOST":
+        enriched["reason"] = f"{enriched.get('reason', '')} Aprendizado: {learning.get('reason', '')}".strip()
+    elif learning.get("action") == "CAUTION":
+        enriched["reason"] = f"{enriched.get('reason', '')} Cautela: {learning.get('reason', '')}".strip()
+    return enriched
+
+
 def _bfbm_export_dedupe_key(alert: dict[str, Any]) -> tuple[str, str, str, str, str]:
     line = alert.get("line")
     if isinstance(line, float):
@@ -914,12 +931,28 @@ async def build_live_bfbm_candidate_alerts(settings, limit: int = 12) -> list[di
                 settings,
                 bfbm_market,
             )
+            learning = storage.bfbm_learning_decision(
+                str(alert.get("market") or ""),
+                str(alert.get("selection") or ""),
+                str(alert.get("strategy") or ""),
+            )
+            alert = _with_learning_analysis(alert, learning)
+            if learning.get("action") == "BLOCK":
+                _record_bfbm_candidate_audit(
+                    storage,
+                    game,
+                    signal,
+                    status="SKIPPED",
+                    reason=f"learning_block:{learning.get('reason', '')}",
+                    bfbm_market=bfbm_market,
+                )
+                continue
             _record_bfbm_candidate_audit(
                 storage,
                 game,
                 signal,
                 status="CANDIDATE",
-                reason="live_csv_generated_candidate",
+                reason=f"live_csv_generated_candidate:{learning.get('action', 'ALLOW')}",
                 bfbm_market=bfbm_market,
             )
             candidates.append(alert)
@@ -1509,6 +1542,27 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                     "count": len(alerts),
                     "generated_at": self._sao_paulo_now().isoformat(),
                     "alerts": alerts,
+                },
+            )
+            return
+        if parsed.path == "/bfbm/learning.json":
+            query = parse_qs(parsed.query)
+            try:
+                limit = int(query.get("limit", ["5000"])[0])
+            except ValueError:
+                limit = 5000
+            storage = Storage(settings.database_path)
+            try:
+                data = storage.bfbm_learning_profile(limit=max(50, min(20000, limit)))
+            finally:
+                storage.close()
+            self._write_json_response(
+                200,
+                {
+                    "ok": True,
+                    "source": "teste_gpt_bfbm_learning",
+                    "generated_at": self._sao_paulo_now().isoformat(),
+                    **data,
                 },
             )
             return
