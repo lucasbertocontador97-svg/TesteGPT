@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from .matching import sportmonks_participant_names
+from .matching import sofascore_team_names, sportmonks_participant_names
 
 
 def extract_score(fixture: dict[str, Any] | None) -> tuple[int | None, int | None]:
@@ -91,6 +92,498 @@ def compact_thestatsapi_statistics(match: dict[str, Any], stats_response: dict[s
         if away_value is not None:
             result[away][target] = away_value
     return {team: values for team, values in result.items() if values}
+
+
+def _sportdb_side_name(match: dict[str, Any], side: str) -> str:
+    for key in (f"{side}Name", f"{side}_name", f"{side}TeamName"):
+        value = match.get(key)
+        if value:
+            return str(value)
+    team = match.get(side) or match.get(f"{side}Team") or match.get(f"{side}_team")
+    if isinstance(team, dict):
+        for key in ("name", "shortName", "displayName"):
+            value = team.get(key)
+            if value:
+                return str(value)
+    return side
+
+
+def _sportdb_number(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value).strip().replace(",", ".")
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not match:
+        return value
+    number = float(match.group(0))
+    return int(number) if number.is_integer() else number
+
+
+def _sportdb_items(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if not isinstance(data, dict):
+        return []
+    for key in ("data", "stats", "statistics", "periods", "items", "response"):
+        value = data.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _sportdb_stat_rows(stats_response: dict[str, Any] | list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    items = _sportdb_items(stats_response)
+    if not items:
+        return []
+    period_candidates = []
+    for item in items:
+        rows = item.get("stats") or item.get("statistics") or item.get("items")
+        if isinstance(rows, list):
+            label = str(item.get("period") or item.get("periodName") or item.get("name") or "").lower()
+            period_candidates.append((label, [row for row in rows if isinstance(row, dict)]))
+    if not period_candidates:
+        return items
+    preferred = ("match", "full time", "fulltime", "total", "all")
+    for label, rows in period_candidates:
+        if any(name in label for name in preferred):
+            return rows
+    return period_candidates[0][1]
+
+
+SPORTDB_STAT_MAP = {
+    "ball possession": "Ball Possession",
+    "expected goals (xg)": "Expected goals (xG)",
+    "xg on target (xgot)": "xG on target (xGOT)",
+    "total shots": "Total Shots",
+    "shots on target": "Shots on Goal",
+    "shots off target": "Shots off Goal",
+    "blocked shots": "Blocked Shots",
+    "corner kicks": "Corner Kicks",
+    "big chances": "Big Chances",
+    "big chances missed": "Big Chances Missed",
+    "shots inside the box": "Shots inside the box",
+    "shots outside the box": "Shots outside the box",
+    "touches in opposition box": "Touches in opposition box",
+    "passes in final third": "Passes in final third",
+    "fouls": "Fouls",
+    "goalkeeper saves": "Goalkeeper saves",
+}
+
+
+def compact_sportdb_statistics(match: dict[str, Any], stats_response: dict[str, Any] | list[dict[str, Any]] | None) -> dict[str, Any]:
+    home = _sportdb_side_name(match, "home")
+    away = _sportdb_side_name(match, "away")
+    result: dict[str, dict[str, Any]] = {home: {}, away: {}}
+    for row in _sportdb_stat_rows(stats_response):
+        raw_name = row.get("statName") or row.get("name") or row.get("title") or row.get("type")
+        if not raw_name:
+            continue
+        name = SPORTDB_STAT_MAP.get(str(raw_name).strip().lower(), str(raw_name).strip())
+        home_value = row.get("homeValue", row.get("home", row.get("home_value")))
+        away_value = row.get("awayValue", row.get("away", row.get("away_value")))
+        if home_value is not None:
+            result[home][name] = _sportdb_number(home_value)
+        if away_value is not None:
+            result[away][name] = _sportdb_number(away_value)
+
+    for team in (home, away):
+        values = result[team]
+        shots = values.get("Total Shots") or 0
+        shots_on = values.get("Shots on Goal") or 0
+        corners = values.get("Corner Kicks") or 0
+        big_chances = values.get("Big Chances") or 0
+        touches_box = values.get("Touches in opposition box") or 0
+        inside_box = values.get("Shots inside the box") or 0
+        xg = values.get("Expected goals (xG)") or 0
+        final_third = values.get("Passes in final third") or 0
+        try:
+            has_pressure_signal = any(
+                float(value or 0) > 0
+                for value in (shots, shots_on, corners, big_chances, touches_box, inside_box, xg, final_third)
+            )
+            if has_pressure_signal and "Dangerous Attacks" not in values:
+                values["Dangerous Attacks"] = round(
+                    float(shots_on) * 3
+                    + float(shots) * 0.8
+                    + float(corners) * 1.2
+                    + float(big_chances) * 8
+                    + float(touches_box) * 0.7
+                      + float(inside_box) * 1.5
+                      + float(xg) * 10,
+                      1,
+                  )
+            if has_pressure_signal and "Attacks" not in values:
+                values["Attacks"] = round(
+                    float(final_third) if final_third else float(touches_box) * 4 + float(shots) * 3 + float(corners) * 4,
+                    1,
+                )
+        except (TypeError, ValueError):
+            pass
+    return {team: values for team, values in result.items() if values}
+
+
+SOFASCORE_STAT_MAP = {
+    "ballpossession": "Ball Possession",
+    "ball possession": "Ball Possession",
+    "expectedgoals": "Expected goals (xG)",
+    "expected goals": "Expected goals (xG)",
+    "xg": "Expected goals (xG)",
+    "totalshotsongoal": "Total Shots",
+    "total shots": "Total Shots",
+    "shotsongoal": "Shots on Goal",
+    "shots on target": "Shots on Goal",
+    "shots off target": "Shots off Goal",
+    "shotsoffgoal": "Shots off Goal",
+    "blockedshots": "Blocked Shots",
+    "blocked shots": "Blocked Shots",
+    "cornerkicks": "Corner Kicks",
+    "corner kicks": "Corner Kicks",
+    "corners": "Corner Kicks",
+    "bigchances": "Big Chances",
+    "big chances": "Big Chances",
+    "shotsinsidethebox": "Shots inside the box",
+    "shots inside the box": "Shots inside the box",
+    "shotsoutsidethebox": "Shots outside the box",
+    "shots outside the box": "Shots outside the box",
+    "fouls": "Fouls",
+    "yellowcards": "Yellow Cards",
+    "yellow cards": "Yellow Cards",
+    "redcards": "Red Cards",
+    "red cards": "Red Cards",
+    "goalkeepersaves": "Goalkeeper saves",
+    "goalkeeper saves": "Goalkeeper saves",
+    "passes": "Total passes",
+    "accuratepasses": "Accurate passes",
+    "accurate passes": "Accurate passes",
+    "tackles": "Tackles",
+}
+
+
+def _sofascore_number(value: Any) -> Any:
+    if isinstance(value, str):
+        cleaned = value.strip().replace("%", "").replace(",", ".")
+        if cleaned == "":
+            return value
+        try:
+            number = float(cleaned)
+            return int(number) if number.is_integer() else number
+        except ValueError:
+            return value
+    return value
+
+
+def _sofascore_stats_blocks(stats_response: dict[str, Any] | list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    if isinstance(stats_response, list):
+        return [item for item in stats_response if isinstance(item, dict)]
+    if not isinstance(stats_response, dict):
+        return []
+    for key in ("statistics", "data", "response"):
+        value = stats_response.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            nested = _sofascore_stats_blocks(value)
+            if nested:
+                return nested
+    return []
+
+
+def _sofascore_items(stats_response: dict[str, Any] | list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    blocks = _sofascore_stats_blocks(stats_response)
+    if not blocks:
+        return []
+    selected = blocks[0]
+    for block in blocks:
+        period = str(block.get("period") or block.get("periodName") or block.get("name") or "").upper()
+        if period in {"ALL", "MATCH", "FULLTIME", "REGULAR"}:
+            selected = block
+            break
+    groups = selected.get("groups") or selected.get("statisticsGroups") or selected.get("items") or []
+    if isinstance(groups, dict):
+        groups = groups.get("data", []) or groups.get("groups", [])
+    items: list[dict[str, Any]] = []
+    for group in groups if isinstance(groups, list) else []:
+        if not isinstance(group, dict):
+            continue
+        group_items = group.get("statisticsItems") or group.get("items") or []
+        if isinstance(group_items, list):
+            items.extend(item for item in group_items if isinstance(item, dict))
+    return items
+
+
+def compact_sofascore_statistics(
+    match: dict[str, Any],
+    stats_response: dict[str, Any] | list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    home, away = sofascore_team_names(match)
+    home = home or "home"
+    away = away or "away"
+    result: dict[str, dict[str, Any]] = {home: {}, away: {}}
+
+    for item in _sofascore_items(stats_response):
+        raw_name = item.get("key") or item.get("name") or item.get("title")
+        if not raw_name:
+            continue
+        lowered = str(raw_name).strip().lower()
+        name = SOFASCORE_STAT_MAP.get(lowered) or SOFASCORE_STAT_MAP.get(re.sub(r"[^a-z0-9]+", "", lowered))
+        if not name:
+            continue
+        home_value = item.get("home", item.get("homeValue", item.get("home_value")))
+        away_value = item.get("away", item.get("awayValue", item.get("away_value")))
+        if home_value is not None:
+            result[home][name] = _sofascore_number(home_value)
+        if away_value is not None:
+            result[away][name] = _sofascore_number(away_value)
+
+    for team in (home, away):
+        values = result[team]
+        shots = values.get("Total Shots") or 0
+        shots_on = values.get("Shots on Goal") or 0
+        corners = values.get("Corner Kicks") or 0
+        big_chances = values.get("Big Chances") or 0
+        inside_box = values.get("Shots inside the box") or 0
+        xg = values.get("Expected goals (xG)") or 0
+        try:
+            has_pressure_signal = any(
+                float(value or 0) > 0 for value in (shots, shots_on, corners, big_chances, inside_box, xg)
+            )
+            if has_pressure_signal and "Dangerous Attacks" not in values:
+                values["Dangerous Attacks"] = round(
+                    float(shots_on) * 3
+                    + float(shots) * 0.8
+                    + float(corners) * 1.2
+                    + float(big_chances) * 8
+                    + float(inside_box) * 1.5
+                    + float(xg) * 10,
+                    1,
+                )
+            if has_pressure_signal and "Attacks" not in values:
+                values["Attacks"] = round(float(shots) * 3 + float(corners) * 4 + float(inside_box) * 2, 1)
+        except (TypeError, ValueError):
+            pass
+    return {team: values for team, values in result.items() if values}
+
+
+def _sofascore_package_data(package: dict[str, Any], source: str) -> Any:
+    sources = package.get("sources", {}) if isinstance(package, dict) else {}
+    payload = sources.get(source, {}) if isinstance(sources, dict) else {}
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        return None
+    return payload.get("data")
+
+
+def _walk_dict_items(data: Any, preferred_keys: tuple[str, ...]) -> list[dict[str, Any]]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if not isinstance(data, dict):
+        return []
+    for key in preferred_keys:
+        value = data.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            nested = _walk_dict_items(value, preferred_keys)
+            if nested:
+                return nested
+    return []
+
+
+def _shot_team_name(shot: dict[str, Any]) -> str:
+    team = shot.get("team") or shot.get("playerTeam") or shot.get("participant")
+    if isinstance(team, dict):
+        for key in ("name", "shortName", "displayName"):
+            value = team.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def _shot_is_on_target(shot: dict[str, Any]) -> bool:
+    for key in ("onGoalShot", "isOnTarget", "onTarget"):
+        if isinstance(shot.get(key), bool):
+            return bool(shot.get(key))
+    shot_type = str(shot.get("shotType") or shot.get("type") or "").lower()
+    situation = str(shot.get("goalType") or shot.get("bodyPart") or "").lower()
+    return any(token in shot_type or token in situation for token in ("goal", "save", "post", "on target"))
+
+
+def _shot_xg(shot: dict[str, Any]) -> float:
+    for key in ("xg", "expectedGoals", "expectedGoal", "xG"):
+        try:
+            if shot.get(key) is not None:
+                return float(str(shot.get(key)).replace(",", "."))
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def _shotmap_summary(match: dict[str, Any], shotmap_response: Any) -> dict[str, dict[str, Any]]:
+    home, away = sofascore_team_names(match)
+    home = home or "home"
+    away = away or "away"
+    result: dict[str, dict[str, Any]] = {
+        home: {"shots": 0, "on_target": 0, "goals": 0, "xg": 0.0},
+        away: {"shots": 0, "on_target": 0, "goals": 0, "xg": 0.0},
+    }
+    shots = _walk_dict_items(shotmap_response, ("shotmap", "shots", "data", "items", "response"))
+    for shot in shots:
+        team = None
+        if isinstance(shot.get("isHome"), bool):
+            team = home if shot.get("isHome") else away
+        else:
+            shot_team = _shot_team_name(shot).lower()
+            if shot_team and shot_team in home.lower():
+                team = home
+            elif shot_team and shot_team in away.lower():
+                team = away
+        if team not in result:
+            continue
+        result[team]["shots"] += 1
+        if _shot_is_on_target(shot):
+            result[team]["on_target"] += 1
+        if shot.get("isGoal") is True or str(shot.get("shotType") or "").lower() == "goal":
+            result[team]["goals"] += 1
+        result[team]["xg"] = round(float(result[team]["xg"]) + _shot_xg(shot), 3)
+    return {team: values for team, values in result.items() if values.get("shots")}
+
+
+def compact_sofascore_package(match: dict[str, Any], package: dict[str, Any]) -> dict[str, Any]:
+    stats = compact_sofascore_statistics(match, _sofascore_package_data(package, "statistics"))
+    shot_summary = _shotmap_summary(match, _sofascore_package_data(package, "shotmap"))
+    for team, values in shot_summary.items():
+        team_stats = stats.setdefault(team, {})
+        team_stats.setdefault("Shotmap Shots", values.get("shots"))
+        team_stats.setdefault("Shotmap On Target", values.get("on_target"))
+        team_stats.setdefault("Shotmap xG", values.get("xg"))
+        team_stats.setdefault("Total Shots", values.get("shots"))
+        team_stats.setdefault("Shots on Goal", values.get("on_target"))
+        team_stats.setdefault("Expected goals (xG)", values.get("xg"))
+
+    # Recompute synthetic pressure after merging shotmap data.
+    for values in stats.values():
+        shots = values.get("Total Shots") or values.get("Shotmap Shots") or 0
+        shots_on = values.get("Shots on Goal") or values.get("Shotmap On Target") or 0
+        corners = values.get("Corner Kicks") or 0
+        big_chances = values.get("Big Chances") or 0
+        inside_box = values.get("Shots inside the box") or 0
+        xg = values.get("Expected goals (xG)") or values.get("Shotmap xG") or 0
+        try:
+            if any(float(value or 0) > 0 for value in (shots, shots_on, corners, big_chances, inside_box, xg)):
+                values["Dangerous Attacks"] = max(
+                    float(values.get("Dangerous Attacks") or 0),
+                    round(
+                        float(shots_on) * 3
+                        + float(shots) * 0.8
+                        + float(corners) * 1.2
+                        + float(big_chances) * 8
+                        + float(inside_box) * 1.5
+                        + float(xg) * 10,
+                        1,
+                    ),
+                )
+                values.setdefault("Attacks", round(float(shots) * 3 + float(corners) * 4 + float(inside_box) * 2, 1))
+        except (TypeError, ValueError):
+            continue
+    return {team: values for team, values in stats.items() if values}
+
+
+def _limit_dict(data: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    return {key: data.get(key) for key in keys if data.get(key) is not None}
+
+
+def _compact_incidents(data: Any, limit: int = 18) -> list[dict[str, Any]]:
+    items = _walk_dict_items(data, ("incidents", "events", "data", "items", "response"))
+    compacted = []
+    for item in items[:limit]:
+        player = item.get("player") or item.get("playerIn") or item.get("playerOut")
+        team = item.get("team")
+        compacted.append(
+            {
+                "time": item.get("time") or item.get("minute"),
+                "type": item.get("incidentType") or item.get("type"),
+                "detail": item.get("text") or item.get("reason") or item.get("incidentClass"),
+                "home_score": item.get("homeScore"),
+                "away_score": item.get("awayScore"),
+                "player": player.get("name") if isinstance(player, dict) else player,
+                "team": team.get("name") if isinstance(team, dict) else team,
+            }
+        )
+    return compacted
+
+
+def _compact_odds(data: Any) -> dict[str, Any]:
+    items = _walk_dict_items(data, ("markets", "odds", "data", "items", "response"))
+    sample = []
+    for item in items[:10]:
+        sample.append(
+            _limit_dict(
+                item,
+                ("marketName", "name", "choice", "value", "odd", "fractionalValue", "decimalValue"),
+            )
+        )
+    return {"available": bool(items), "markets_seen": len(items), "sample": sample}
+
+
+def _compact_lineups(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {"available": False}
+    root = data.get("data") if isinstance(data.get("data"), dict) else data
+    home = root.get("home") or root.get("homeLineup") or {}
+    away = root.get("away") or root.get("awayLineup") or {}
+    return {
+        "available": bool(home or away),
+        "confirmed": root.get("confirmed") or root.get("isConfirmed"),
+        "home_formation": home.get("formation") if isinstance(home, dict) else None,
+        "away_formation": away.get("formation") if isinstance(away, dict) else None,
+    }
+
+
+def _compact_named_items(data: Any, preferred: tuple[str, ...], limit: int = 8) -> list[dict[str, Any]]:
+    rows = _walk_dict_items(data, preferred)
+    result = []
+    for row in rows[:limit]:
+        player = row.get("player") if isinstance(row.get("player"), dict) else row
+        result.append(_limit_dict(player, ("name", "shortName", "position", "rating", "averageRating")))
+    return result
+
+
+def summarize_sofascore_package(match: dict[str, Any], package: dict[str, Any]) -> dict[str, Any]:
+    sources = package.get("sources", {}) if isinstance(package, dict) else {}
+    coverage = package.get("coverage", {}) if isinstance(package, dict) else {}
+    details = _sofascore_package_data(package, "details")
+    detail_root = details.get("event", details.get("data", details)) if isinstance(details, dict) else {}
+    return {
+        "provider": "zyla_sofascore",
+        "match_id": package.get("match_id"),
+        "coverage": coverage,
+        "endpoints_ok": [name for name, ok in coverage.items() if ok],
+        "endpoints_failed": [
+            {"name": name, "status": payload.get("status"), "error": payload.get("error")}
+            for name, payload in sources.items()
+            if isinstance(payload, dict) and not payload.get("ok")
+        ][:10],
+        "details": _limit_dict(
+            detail_root if isinstance(detail_root, dict) else {},
+            ("id", "slug", "status", "startTimestamp", "homeScore", "awayScore", "tournament", "venue"),
+        ),
+        "incidents": _compact_incidents(_sofascore_package_data(package, "incidents")),
+        "shotmap": _shotmap_summary(match, _sofascore_package_data(package, "shotmap")),
+        "lineups": _compact_lineups(_sofascore_package_data(package, "lineups")),
+        "odds": _compact_odds(_sofascore_package_data(package, "odds")),
+        "pregame_form": {
+            "available": _sofascore_package_data(package, "pregame_form") is not None,
+            "sample": _limit_dict(
+                _sofascore_package_data(package, "pregame_form")
+                if isinstance(_sofascore_package_data(package, "pregame_form"), dict)
+                else {},
+                ("homeTeam", "awayTeam", "home", "away", "form"),
+            ),
+        },
+        "best_players": _compact_named_items(_sofascore_package_data(package, "best_players"), ("players", "data", "items", "response")),
+        "player_average_positions_available": _sofascore_package_data(package, "player_average_positions") is not None,
+    }
 
 
 def _to_int_or_raw(value: Any) -> Any:
@@ -284,12 +777,42 @@ def has_actionable_stats(stats: dict[str, Any]) -> bool:
         "attacks",
         "ball possession",
     }
+    pressure_stats = {
+        "shots on goal",
+        "shots on target",
+        "total shots",
+        "corner kicks",
+        "corners",
+        "dangerous attacks",
+        "attacks",
+    }
+
+    def meaningful(value: Any) -> bool:
+        if value in (None, ""):
+            return False
+        if isinstance(value, str):
+            cleaned = value.strip().replace("%", "")
+            if cleaned in ("", "0", "0.0"):
+                return False
+            try:
+                return float(cleaned) > 0
+            except ValueError:
+                return True
+        try:
+            return float(value) > 0
+        except (TypeError, ValueError):
+            return True
+
     found = 0
+    pressure_found = 0
     for team_stats in stats.values():
         for key, value in team_stats.items():
-            if str(key).lower() in important and value not in (None, "", "0%"):
+            lowered = str(key).lower()
+            if lowered in important and meaningful(value):
                 found += 1
-    return found >= 3
+                if lowered in pressure_stats:
+                    pressure_found += 1
+    return found >= 3 and pressure_found >= 2
 
 
 def is_high_variance_match(league: str, home: str, away: str) -> bool:

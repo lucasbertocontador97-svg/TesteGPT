@@ -103,6 +103,76 @@ def find_matching_thestatsapi_match(api_football_fixture: dict[str, Any], matche
     return best[1] if best[0] >= 0.70 else None
 
 
+def _sportdb_side_name(match: dict[str, Any], side: str) -> str:
+    for key in (f"{side}Name", f"{side}_name", f"{side}TeamName"):
+        value = match.get(key)
+        if value:
+            return str(value)
+    team = match.get(side) or match.get(f"{side}Team") or match.get(f"{side}_team")
+    if isinstance(team, dict):
+        for key in ("name", "shortName", "displayName"):
+            value = team.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def sportdb_team_names(match: dict[str, Any]) -> tuple[str, str]:
+    return _sportdb_side_name(match, "home"), _sportdb_side_name(match, "away")
+
+
+def find_matching_sportdb_match(api_football_fixture: dict[str, Any], matches: list[dict[str, Any]]) -> dict[str, Any] | None:
+    teams = api_football_fixture.get("teams", {})
+    home = teams.get("home", {}).get("name", "")
+    away = teams.get("away", {}).get("name", "")
+    best: tuple[float, dict[str, Any] | None] = (0.0, None)
+    for match in matches:
+        s_home, s_away = sportdb_team_names(match)
+        if not s_home or not s_away:
+            continue
+        direct = (similarity(home, s_home) + similarity(away, s_away)) / 2
+        swapped = (similarity(home, s_away) + similarity(away, s_home)) / 2
+        score = max(direct, swapped)
+        if score > best[0]:
+            best = (score, match)
+    return best[1] if best[0] >= 0.68 else None
+
+
+def _sofascore_side_name(match: dict[str, Any], side: str) -> str:
+    team = match.get(f"{side}Team") or match.get(side) or match.get(f"{side}_team")
+    if isinstance(team, dict):
+        for key in ("name", "shortName", "slug", "displayName"):
+            value = team.get(key)
+            if value:
+                return str(value)
+    for key in (f"{side}TeamName", f"{side}_name", f"{side}Name"):
+        value = match.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def sofascore_team_names(match: dict[str, Any]) -> tuple[str, str]:
+    return _sofascore_side_name(match, "home"), _sofascore_side_name(match, "away")
+
+
+def find_matching_sofascore_match(api_football_fixture: dict[str, Any], matches: list[dict[str, Any]]) -> dict[str, Any] | None:
+    teams = api_football_fixture.get("teams", {})
+    home = teams.get("home", {}).get("name", "")
+    away = teams.get("away", {}).get("name", "")
+    best: tuple[float, dict[str, Any] | None] = (0.0, None)
+    for match in matches:
+        ss_home, ss_away = sofascore_team_names(match)
+        if not ss_home or not ss_away:
+            continue
+        direct = (similarity(home, ss_home) + similarity(away, ss_away)) / 2
+        swapped = (similarity(home, ss_away) + similarity(away, ss_home)) / 2
+        score = max(direct, swapped)
+        if score > best[0]:
+            best = (score, match)
+    return best[1] if best[0] >= 0.68 else None
+
+
 def find_matching_totalcorner_match(api_football_fixture: dict[str, Any], matches: list[dict[str, Any]]) -> dict[str, Any] | None:
     teams = api_football_fixture.get("teams", {})
     home = teams.get("home", {}).get("name", "")

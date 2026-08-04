@@ -36,6 +36,7 @@ class GameSnapshot:
     stats: dict[str, Any]
     markets: list[MarketOption]
     totalcorner_match: dict[str, Any] = field(default_factory=dict)
+    analysis_package: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

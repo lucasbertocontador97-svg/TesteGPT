@@ -697,6 +697,7 @@ class BridgeState:
         self.last_result_notifications: list[dict[str, str]] = []
         self.pending_result_notifications: list[dict[str, str]] = []
         self.last_periodic_summary_date: str | None = None
+        self.last_tips_csv_get: dict[str, Any] | None = None
         self.result_history_seeded = False
         self.source_history: list[dict[str, Any]] = []
         self.seen_bet_ids: set[str] = set()
@@ -729,6 +730,8 @@ class BridgeState:
                 item for item in data.get("pending_result_notifications", []) if isinstance(item, dict)
             ][-50:]
             self.last_periodic_summary_date = data.get("last_periodic_summary_date") or None
+            last_tips_csv_get = data.get("last_tips_csv_get")
+            self.last_tips_csv_get = last_tips_csv_get if isinstance(last_tips_csv_get, dict) else None
             self.result_history_seeded = bool(data.get("result_history_seeded"))
             self.source_history = [item for item in data.get("source_history", []) if isinstance(item, dict)][-200:]
             self.seen_bet_ids = set(data.get("seen_bet_ids", []))
@@ -745,6 +748,7 @@ class BridgeState:
                 "last_result_notifications": self.last_result_notifications[-50:],
                 "pending_result_notifications": self.pending_result_notifications[-50:],
                 "last_periodic_summary_date": self.last_periodic_summary_date,
+                "last_tips_csv_get": self.last_tips_csv_get,
                 "result_history_seeded": self.result_history_seeded,
                 "source_history": self.source_history[-200:],
                 "seen_bet_ids": sorted(self.seen_bet_ids)[-500:],
@@ -895,6 +899,19 @@ class BridgeState:
             self.rows = self._visible_rows()
             return _csv_text(list(self.rows))
 
+    def mark_tips_csv_get(self, *, client: str, user_agent: str) -> int:
+        with self.lock:
+            self.rows = self._visible_rows()
+            visible_count = len(self.rows)
+            self.last_tips_csv_get = {
+                "at": _now(),
+                "tips": visible_count,
+                "client": client,
+                "user_agent": user_agent[:200],
+            }
+        self.save()
+        return visible_count
+
     def status(self) -> dict[str, Any]:
         with self.lock:
             return {
@@ -914,6 +931,7 @@ class BridgeState:
                     }
                     for row in self._visible_rows()
                 ],
+                "last_tips_csv_get": self.last_tips_csv_get,
                 "last_bet_notifications": self.last_bet_notifications[-5:],
                 "last_result_notifications": self.last_result_notifications[-5:],
                 "pending_result_count": len(self.pending_result_notifications),
@@ -1138,6 +1156,9 @@ def make_handler(state: BridgeState, api_token: str | None) -> type[BaseHTTPRequ
         def _authorized(self) -> bool:
             if not api_token:
                 return True
+            client_ip = str(self.client_address[0] if self.client_address else "")
+            if client_ip in {"127.0.0.1", "::1", "localhost"}:
+                return True
             parsed = urllib.parse.urlparse(self.path)
             token = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
             return token == api_token
@@ -1177,7 +1198,12 @@ def make_handler(state: BridgeState, api_token: str | None) -> type[BaseHTTPRequ
                 self._send(200, body, "application/json; charset=utf-8")
                 return
             if parsed.path == "/tips.csv":
+                served_count = state.mark_tips_csv_get(
+                    client=str(self.client_address[0] if self.client_address else ""),
+                    user_agent=str(self.headers.get("User-Agent") or ""),
+                )
                 body = ("\ufeff" + state.csv()).encode("utf-8")
+                print(f"[tips] CSV servido com {served_count} tip(s).")
                 self._send(200, body, "text/csv; charset=utf-8")
                 return
             self._send(404, b"not found\n", "text/plain; charset=utf-8")

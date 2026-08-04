@@ -388,16 +388,19 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
 
 
 def _catalog_raw(market: dict[str, Any]) -> dict[str, Any]:
-    raw = market.get("raw")
+    raw = market.get("raw") or market.get("catalog_raw")
     if isinstance(raw, dict):
         return raw
-    raw_json = market.get("raw_json")
-    if isinstance(raw_json, str) and raw_json.strip():
+    for raw_key in ("raw_json", "catalog_json"):
+        raw_json = market.get(raw_key)
+        if not isinstance(raw_json, str) or not raw_json.strip():
+            continue
         try:
             parsed = json.loads(raw_json)
         except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
+            continue
+        if isinstance(parsed, dict):
+            return parsed
     return {}
 
 
@@ -739,6 +742,11 @@ def _audit_row(
         "market": alert.get("market", ""),
         "selection": alert.get("selection", ""),
         "line": alert.get("line"),
+        "odd": alert.get("odd"),
+        "confidence": alert.get("confidence"),
+        "stake": alert.get("stake", ""),
+        "strategy": alert.get("strategy", ""),
+        "analysis_json": alert.get("analysis_json", ""),
         "bfbm_event_name": row.get("EventName", ""),
         "bfbm_market_name": row.get("MarketName", ""),
         "bfbm_selection_name": row.get("SelectionName", ""),

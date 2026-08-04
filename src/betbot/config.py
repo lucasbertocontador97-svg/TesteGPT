@@ -22,6 +22,9 @@ class Settings:
     api_football_key: str
     sportmonks_api_token: str | None
     thestatsapi_key: str | None
+    sportdb_key: str | None
+    sofascore_api_key: str | None
+    sofascore_strict: bool
     totalcorner_token: str | None
     openai_api_key: str | None
     openai_model: str | None
@@ -79,6 +82,15 @@ def load_settings() -> Settings:
         api_football_key=os.getenv("API_FOOTBALL_KEY", ""),
         sportmonks_api_token=os.getenv("SPORTMONKS_API_TOKEN") or None,
         thestatsapi_key=os.getenv("THESTATSAPI_KEY") or None,
+        sportdb_key=os.getenv("SPORTDB_KEY") or None,
+        sofascore_api_key=(
+            os.getenv("SOFASCORE_API_KEY")
+            or os.getenv("ZYLA_SOFASCORE_API_KEY")
+            or os.getenv("ZYLA_API_KEY")
+            or os.getenv("SOFASCORE_ZYLA_API_KEY")
+            or None
+        ),
+        sofascore_strict=os.getenv("SOFASCORE_STRICT", "true").lower() in {"1", "true", "yes", "sim"},
         totalcorner_token=os.getenv("TOTALCORNER_TOKEN") or None,
         openai_api_key=os.getenv("OPENAI_API_KEY") or None,
         openai_model=os.getenv("OPENAI_MODEL") or None,
@@ -172,6 +184,9 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
         "API_FOOTBALL_KEY": bool(settings.api_football_key),
         "SPORTMONKS_API_TOKEN": bool(settings.sportmonks_api_token),
         "THESTATSAPI_KEY": bool(settings.thestatsapi_key),
+        "SPORTDB_KEY": bool(settings.sportdb_key),
+        "SOFASCORE_API_KEY": bool(settings.sofascore_api_key),
+        "SOFASCORE_STRICT": settings.sofascore_strict,
         "TOTALCORNER_TOKEN": bool(settings.totalcorner_token),
         "OPENAI_API_KEY": bool(settings.openai_api_key),
         "DRY_RUN_FALSE": not settings.dry_run,

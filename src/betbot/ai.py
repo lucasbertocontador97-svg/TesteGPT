@@ -14,6 +14,8 @@ Regras obrigatorias:
 - So pode escolher mercado presente em markets.
 - So pode escolher odd acima da odd minima ja filtrada.
 - Se os dados forem fracos, confusos, sem pressao real ou mercado ruim, responda NO_BET.
+- Quando analysis_package existir, use details, incidents, shotmap, lineups, odds e forma pre-jogo como contexto real.
+- Cite dados concretos recebidos; se o pacote nao trouxe base suficiente, responda NO_BET.
 - Nao invente placar, tempo, estatistica, odd ou bookmaker.
 - Retorne somente JSON valido."""
 
@@ -54,6 +56,7 @@ async def analyze_game(game: GameSnapshot, *, api_key: str | None, model: str | 
             "minute": game.minute,
             "score": {"home": game.score_home, "away": game.score_away},
             "stats": game.stats,
+            "analysis_package": game.analysis_package,
         },
         "markets": [_market_to_dict(market) for market in game.markets[:60]],
         "output_schema": {
@@ -111,9 +114,10 @@ async def analyze_live_game_without_odds(game: GameSnapshot, *, api_key: str | N
             "minute": game.minute,
             "score": {"home": game.score_home, "away": game.score_away},
             "stats": game.stats,
+            "analysis_package": game.analysis_package,
         },
         "instruction": (
-            "Analise somente o jogo ao vivo e as estatisticas. Ignore odds e nao recomende aposta real. "
+            "Analise somente o jogo ao vivo, as estatisticas e o pacote completo do provedor quando existir. Ignore odds e nao recomende aposta real. "
             "Diga quais mercados fariam sentido observar depois, como gols ou escanteios, e explique em portugues."
         ),
     }
@@ -161,6 +165,7 @@ async def suggest_market_without_odds(
             "minute": game.minute,
             "score": {"home": game.score_home, "away": game.score_away},
             "stats": game.stats,
+            "analysis_package": game.analysis_package,
         },
         "allowed_market_families": ["goals", "corners"],
         "allowed_selections": [
@@ -173,6 +178,7 @@ async def suggest_market_without_odds(
         },
         "rules": [
             "Escolha o mercado pelo momento do jogo, sem ver odds.",
+            "Use o pacote completo do SofaScore quando existir: details, incidents, shotmap, lineups, odds, pregame_form e best_players.",
             "Se nao houver leitura clara, responda should_check_odds=false.",
             "Se estatisticas detalhadas estiverem vazias ou insuficientes, responda should_check_odds=false.",
             "Nao baseie entrada apenas no placar.",

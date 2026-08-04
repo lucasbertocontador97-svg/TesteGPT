@@ -31,14 +31,14 @@ from .bfbm_markets import (
     payload_to_markets,
     row_market_family,
 )
-from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
+from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SofaScoreClient, SportDBClient, SportmonksClient, TheStatsApiClient, TotalCornerClient
 from .config import database_storage_status, load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
 from .markets import flatten_all_markets, flatten_markets, market_matches_idea
-from .matching import find_matching_odds_event, find_matching_sportmonks_fixture, find_matching_thestatsapi_match, find_matching_totalcorner_match, sportmonks_participant_names
+from .matching import find_matching_odds_event, find_matching_sofascore_match, find_matching_sportdb_match, find_matching_sportmonks_fixture, find_matching_thestatsapi_match, find_matching_totalcorner_match, sofascore_team_names, sportdb_team_names, sportmonks_participant_names
 from .models import Decision, GameSnapshot
 from .settlement import settle_alert
-from .stats import compact_player_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, compact_thestatsapi_statistics, compact_totalcorner_statistics, extract_minute, extract_score, has_actionable_stats, is_blocked_match_type, is_high_variance_match, stats_value, total_stat
+from .stats import compact_player_statistics, compact_sofascore_package, compact_sofascore_statistics, compact_sportdb_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, compact_thestatsapi_statistics, compact_totalcorner_statistics, extract_minute, extract_score, has_actionable_stats, is_blocked_match_type, is_high_variance_match, stats_value, summarize_sofascore_package, total_stat
 from .storage import Storage
 from .telegram_io import alert_keyboard, format_alert, send_message
 
@@ -156,6 +156,7 @@ def _live_analysis_payload(
             "reason": getattr(signal, "reason", ""),
         },
         "available_bfbm_market": available_market,
+        "analysis_package": game.analysis_package,
         "stats_summary": compact_stats_summary(game.stats),
     }
 
@@ -683,10 +684,80 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
 
 
 async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, storage: Storage) -> list[GameSnapshot]:
-    if not settings.bfbm_export or not settings.totalcorner_token:
+    if not settings.bfbm_export:
         return []
     catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
     if not catalog_rows:
+        return []
+    if getattr(settings, "sofascore_strict", True):
+        if not settings.sofascore_api_key:
+            logger.warning("BFBM strict SofaScore ativo, mas SOFASCORE_API_KEY nao esta configurada.")
+            return []
+        live = await load_sofascore_live(settings, http, limit=_bfbm_totalcorner_live_limit(settings))
+        sofascore_client = make_sofascore_client(settings, http)
+        if not sofascore_client:
+            return []
+        snapshots: list[GameSnapshot] = []
+        learned_aliases: list[dict] = []
+        for index, match in enumerate(live):
+            home, away = sofascore_team_names(match)
+            if not home or not away:
+                continue
+            event_label = f"{home} x {away}"
+            best_score = 0
+            best_event_name = ""
+            for row in catalog_rows:
+                score = event_score_for_row(event_label, row)
+                if score > best_score:
+                    best_score = score
+                    best_event_name = str(row.get("event_name") or "")
+            if best_score < 75:
+                continue
+            raw_score = _event_score(event_label, best_event_name)
+            if raw_score >= 75:
+                learned_aliases.append(
+                    {
+                        "source_event_name": event_label,
+                        "target_event_name": best_event_name,
+                        "score": raw_score,
+                    }
+                )
+            match_id = _sofascore_match_id(match) or str(index)
+            try:
+                package = await sofascore_client.match_package(match_id)
+                stats = compact_sofascore_package(match, package)
+                analysis_package = summarize_sofascore_package(match, package)
+            except httpx.HTTPStatusError as exc:
+                logger.warning("SofaScore BFBM package %s falhou com HTTP %s.", match_id, exc.response.status_code)
+                continue
+            except Exception as exc:
+                logger.warning("SofaScore BFBM package %s falhou: %s", match_id, exc)
+                continue
+            if not has_actionable_stats(stats):
+                logger.info("SofaScore sem estatisticas acionaveis para BFBM %s.", event_label)
+                continue
+            score_home, score_away = _sofascore_score(match)
+            snapshots.append(
+                GameSnapshot(
+                    event_id=f"tc-bfbm-ss-{match_id}",
+                    fixture_id=_sofascore_int(match_id),
+                    league=_sofascore_league_name(match) or "SofaScore Live",
+                    home=home,
+                    away=away,
+                    minute=_sofascore_minute(match),
+                    score_home=score_home,
+                    score_away=score_away,
+                    stats=stats,
+                    markets=[],
+                    totalcorner_match={},
+                    analysis_package=analysis_package,
+                )
+            )
+        if learned_aliases:
+            storage.record_bfbm_event_aliases(learned_aliases)
+        return snapshots
+
+    if not settings.totalcorner_token:
         return []
     live = await load_totalcorner_live(settings, http, limit=_bfbm_totalcorner_live_limit(settings))
     snapshots: list[GameSnapshot] = []
@@ -1149,8 +1220,15 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                     continue
 
                 alert = storage.find_alert_by_bfbm_order(market_id, selection_id)
+                export_audit = None
+                if not alert:
+                    export_audit = storage.find_bfbm_export_audit_by_order(market_id, selection_id)
+                    if export_audit and export_audit.get("alert_id"):
+                        alert = storage.get_alert(int(export_audit["alert_id"]))
                 alert_id = int(alert["id"]) if alert else None
                 if alert_id:
+                    matched += 1
+                elif export_audit:
                     matched += 1
                 else:
                     unmatched += 1
@@ -1171,6 +1249,19 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 profit = self._float_or_none(row.get("profit"))
                 order_status = str(row.get("status") or row.get("orderStatus") or "").strip()
                 side = str(row.get("side") or "").strip()
+                audit_line = ""
+                audit_strategy = ""
+                if export_audit:
+                    audit_line = "\\".join(
+                        part
+                        for part in (
+                            str(export_audit.get("bfbm_event_name") or export_audit.get("event_name") or ""),
+                            str(export_audit.get("bfbm_market_name") or export_audit.get("market") or ""),
+                            str(export_audit.get("bfbm_selection_name") or export_audit.get("selection") or ""),
+                        )
+                        if part
+                    )
+                    audit_strategy = str(export_audit.get("strategy") or "")
 
                 storage.record_bfbm_bet_notification(
                     {
@@ -1179,9 +1270,9 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                         "placed_at_iso": placed_at,
                         "size_matched": "" if size is None else str(size),
                         "success": "SYNCED",
-                        "strategy": str(row.get("strategy") or ""),
+                        "strategy": str(row.get("strategy") or audit_strategy or (alert or {}).get("strategy") or ""),
                         "sid": str(row.get("customerStrategyRef") or row.get("customerOrderRef") or ""),
-                        "line": f"{source}:{order_status}",
+                        "line": audit_line or f"{source}:{order_status}",
                         "alert_id": alert_id,
                         "market_id": market_id,
                         "selection_id": selection_id,
@@ -2275,6 +2366,117 @@ async def load_thestatsapi_live(settings, http: HttpJsonClient) -> list[dict]:
         return []
 
 
+async def load_sportdb_live(settings, http: HttpJsonClient, limit: int | None = None) -> list[dict]:
+    if not settings.sportdb_key:
+        return []
+    try:
+        live = await SportDBClient(settings.sportdb_key, http).football_live(limit or max(settings.max_live_events, 50))
+        return [
+            match
+            for match in live
+            if not is_blocked_match_type(
+                str(match.get("leagueName") or match.get("competitionName") or match.get("league") or ""),
+                sportdb_team_names(match)[0],
+                sportdb_team_names(match)[1],
+            )
+        ]
+    except httpx.HTTPStatusError as exc:
+        logger.warning("SportDB live matches falhou com HTTP %s.", exc.response.status_code)
+        return []
+    except Exception as exc:
+        logger.warning("SportDB live matches falhou: %s", exc)
+        return []
+
+
+def _sofascore_league_name(match: dict) -> str:
+    tournament = match.get("tournament")
+    if isinstance(tournament, dict):
+        unique = tournament.get("uniqueTournament")
+        category = tournament.get("category")
+        unique_name = unique.get("name") if isinstance(unique, dict) else ""
+        category_name = category.get("name") if isinstance(category, dict) else ""
+        return str(tournament.get("name") or unique_name or category_name or "")
+    return str(match.get("leagueName") or match.get("competitionName") or match.get("league") or "")
+
+
+def _sofascore_match_id(match: dict) -> str | None:
+    value = match.get("id") or match.get("eventId") or match.get("matchId") or match.get("event_id")
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _sofascore_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value in (None, ""):
+        return None
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _sofascore_score(match: dict) -> tuple[int | None, int | None]:
+    def side_score(side: str) -> int | None:
+        score = match.get(f"{side}Score") or match.get(f"{side}_score")
+        if isinstance(score, dict):
+            for key in ("current", "display", "normaltime", "total"):
+                parsed = _sofascore_int(score.get(key))
+                if parsed is not None:
+                    return parsed
+        return _sofascore_int(score)
+
+    return side_score("home"), side_score("away")
+
+
+def _sofascore_minute(match: dict) -> int | None:
+    for key in ("minute", "currentMinute", "timeMinute", "statusTime"):
+        parsed = _sofascore_int(match.get(key))
+        if parsed is not None:
+            return parsed
+    time_info = match.get("time")
+    if isinstance(time_info, dict):
+        for key in ("played", "minute", "currentMinute"):
+            parsed = _sofascore_int(time_info.get(key))
+            if parsed is not None:
+                return parsed
+        start_ts = _sofascore_int(time_info.get("currentPeriodStartTimestamp"))
+        if start_ts:
+            elapsed = max(0, int((datetime.utcnow().timestamp() - start_ts) // 60))
+            status = match.get("status") if isinstance(match.get("status"), dict) else {}
+            description = str(status.get("description") or status.get("type") or "").casefold()
+            if "2nd" in description or "second" in description or "2" == str(status.get("period") or ""):
+                return min(90, 45 + elapsed)
+            return min(45, elapsed)
+    status = match.get("status")
+    if isinstance(status, dict):
+        return _sofascore_int(status.get("minute") or status.get("elapsed"))
+    return None
+
+
+async def load_sofascore_live(settings, http: HttpJsonClient, limit: int | None = None) -> list[dict]:
+    if not settings.sofascore_api_key:
+        return []
+    try:
+        live = await SofaScoreClient(settings.sofascore_api_key, http).live_matches(
+            limit or max(settings.max_live_events, 50)
+        )
+        return [
+            match
+            for match in live
+            if not is_blocked_match_type(
+                _sofascore_league_name(match),
+                sofascore_team_names(match)[0],
+                sofascore_team_names(match)[1],
+            )
+        ]
+    except httpx.HTTPStatusError as exc:
+        logger.warning("SofaScore live matches falhou com HTTP %s.", exc.response.status_code)
+        return []
+    except Exception as exc:
+        logger.warning("SofaScore live matches falhou: %s", exc)
+        return []
+
+
 async def load_totalcorner_live(settings, http: HttpJsonClient, limit: int | None = None) -> list[dict]:
     if not settings.totalcorner_token:
         return []
@@ -2323,6 +2525,18 @@ def make_thestatsapi_client(settings, http: HttpJsonClient) -> TheStatsApiClient
     return TheStatsApiClient(settings.thestatsapi_key, http)
 
 
+def make_sportdb_client(settings, http: HttpJsonClient) -> SportDBClient | None:
+    if not settings.sportdb_key:
+        return None
+    return SportDBClient(settings.sportdb_key, http)
+
+
+def make_sofascore_client(settings, http: HttpJsonClient) -> SofaScoreClient | None:
+    if not settings.sofascore_api_key:
+        return None
+    return SofaScoreClient(settings.sofascore_api_key, http)
+
+
 def make_totalcorner_client(settings, http: HttpJsonClient) -> TotalCornerClient | None:
     if not settings.totalcorner_token:
         return None
@@ -2367,13 +2581,50 @@ async def fixture_stats_with_sportmonks_fallback(
     sportmonks_client: SportmonksClient | None = None,
     thestatsapi_live: list[dict] | None = None,
     thestatsapi_client: TheStatsApiClient | None = None,
+    sportdb_live: list[dict] | None = None,
+    sportdb_client: SportDBClient | None = None,
     totalcorner_live: list[dict] | None = None,
+    sofascore_live: list[dict] | None = None,
+    sofascore_client: SofaScoreClient | None = None,
+    sofascore_strict: bool = False,
 ) -> dict:
     fixture_id = fixture.get("fixture", {}).get("id")
+
+    sofascore_match = find_matching_sofascore_match(fixture, sofascore_live or []) if sofascore_live else None
+    if sofascore_match and sofascore_client:
+        sofascore_match_id = _sofascore_match_id(sofascore_match)
+        if sofascore_match_id:
+            try:
+                sofascore_package = await sofascore_client.match_package(sofascore_match_id)
+                sofascore_stats = compact_sofascore_package(sofascore_match, sofascore_package)
+                if has_actionable_stats(sofascore_stats):
+                    return sofascore_stats
+            except httpx.HTTPStatusError as exc:
+                logger.warning("SofaScore match package %s falhou com HTTP %s.", sofascore_match_id, exc.response.status_code)
+            except Exception as exc:
+                logger.warning("SofaScore match package %s falhou: %s", sofascore_match_id, exc)
+    if sofascore_strict:
+        return {}
+
     totalcorner_match = find_matching_totalcorner_match(fixture, totalcorner_live or []) if totalcorner_live else None
     totalcorner_stats = compact_totalcorner_statistics(totalcorner_match or {}) if totalcorner_match else {}
     if has_actionable_stats(totalcorner_stats):
         return totalcorner_stats
+
+    sportdb_match = find_matching_sportdb_match(fixture, sportdb_live or []) if sportdb_live else None
+    if sportdb_match and sportdb_client:
+        sportdb_match_id = sportdb_match.get("eventId") or sportdb_match.get("id") or sportdb_match.get("matchId") or sportdb_match.get("event_id")
+        if sportdb_match_id:
+            try:
+                sportdb_raw = await sportdb_client.match_stats(str(sportdb_match_id))
+                sportdb_stats = compact_sportdb_statistics(sportdb_match, sportdb_raw)
+                if has_actionable_stats(sportdb_stats):
+                    return sportdb_stats
+            except httpx.HTTPStatusError as exc:
+                logger.warning("SportDB match stats %s falhou com HTTP %s.", sportdb_match_id, exc.response.status_code)
+            except Exception as exc:
+                logger.warning("SportDB match stats %s falhou: %s", sportdb_match_id, exc)
+
     api_stats = compact_statistics(await api_football.fixture_statistics(int(fixture_id))) if fixture_id else {}
     sportmonks_fixture = find_matching_sportmonks_fixture(fixture, sportmonks_live) if sportmonks_live else None
     sportmonks_stats = compact_sportmonks_statistics(sportmonks_fixture or {}) if sportmonks_fixture else {}
@@ -2409,17 +2660,22 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
     if not football_fixtures:
         logger.info("API-Football nao retornou jogos ao vivo.")
         return []
+    sofascore_strict = getattr(settings, "sofascore_strict", True)
 
     try:
         odds_events = await odds_api.live_events(settings.sport, settings.max_live_events)
     except httpx.HTTPStatusError as exc:
         logger.warning("Odds-API live events falhou com HTTP %s; continuando sem odds.", exc.response.status_code)
         odds_events = []
-    sportmonks_live = await load_sportmonks_live(settings, odds_api.http)
-    sportmonks_client = make_sportmonks_client(settings, odds_api.http)
-    thestatsapi_live = await load_thestatsapi_live(settings, odds_api.http)
-    thestatsapi_client = make_thestatsapi_client(settings, odds_api.http)
-    totalcorner_live = await load_totalcorner_live(settings, odds_api.http)
+    sportmonks_live = [] if sofascore_strict else await load_sportmonks_live(settings, odds_api.http)
+    sportmonks_client = None if sofascore_strict else make_sportmonks_client(settings, odds_api.http)
+    thestatsapi_live = [] if sofascore_strict else await load_thestatsapi_live(settings, odds_api.http)
+    thestatsapi_client = None if sofascore_strict else make_thestatsapi_client(settings, odds_api.http)
+    sportdb_live = [] if sofascore_strict else await load_sportdb_live(settings, odds_api.http)
+    sportdb_client = None if sofascore_strict else make_sportdb_client(settings, odds_api.http)
+    sofascore_live = await load_sofascore_live(settings, odds_api.http)
+    sofascore_client = make_sofascore_client(settings, odds_api.http)
+    totalcorner_live = [] if sofascore_strict else await load_totalcorner_live(settings, odds_api.http)
     fixture_event_pairs: list[tuple[dict, dict | None]] = []
     used_event_ids: set[str] = set()
     for fixture in football_fixtures[: max(settings.odds_detail_limit, 10)]:
@@ -2438,7 +2694,18 @@ async def build_snapshots(settings, odds_api: OddsApiClient, api_football: ApiFo
         fixture_id = fixture.get("fixture", {}).get("id") if fixture else None
         totalcorner_match = find_matching_totalcorner_match(fixture, totalcorner_live or []) if totalcorner_live else None
         stats = await fixture_stats_with_sportmonks_fallback(
-            fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
+            fixture,
+            api_football,
+            sportmonks_live,
+            sportmonks_client,
+            thestatsapi_live,
+            thestatsapi_client,
+            sportdb_live,
+            sportdb_client,
+            totalcorner_live,
+            sofascore_live,
+            sofascore_client,
+            sofascore_strict,
         )
         score_home, score_away = extract_score(fixture)
         fixture_league = fixture.get("league", {}) if fixture else {}
@@ -2495,7 +2762,7 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
 
         for game in snapshots:
             bfbm_source = str(game.event_id or "").startswith("tc-bfbm-")
-            if not bfbm_source and not has_actionable_stats(game.stats):
+            if not has_actionable_stats(game.stats):
                 logger.info("Sem estatisticas suficientes para %s x %s.", game.home, game.away)
                 continue
             bfbm_catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings)) if bfbm_source else []
@@ -3170,6 +3437,8 @@ async def test_analysis_no_odds_cmd(update: Update, context: ContextTypes.DEFAUL
         sportmonks_client = make_sportmonks_client(settings, http)
         thestatsapi_live = await load_thestatsapi_live(settings, http)
         thestatsapi_client = make_thestatsapi_client(settings, http)
+        sportdb_live = await load_sportdb_live(settings, http)
+        sportdb_client = make_sportdb_client(settings, http)
         totalcorner_live = await load_totalcorner_live(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
@@ -3179,7 +3448,15 @@ async def test_analysis_no_odds_cmd(update: Update, context: ContextTypes.DEFAUL
         fixture = fixtures[0]
         fixture_id = fixture.get("fixture", {}).get("id")
         stats = await fixture_stats_with_sportmonks_fallback(
-            fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
+            fixture,
+            api_football,
+            sportmonks_live,
+            sportmonks_client,
+            thestatsapi_live,
+            thestatsapi_client,
+            sportdb_live,
+            sportdb_client,
+            totalcorner_live,
         )
         score_home, score_away = extract_score(fixture)
         teams = fixture.get("teams", {})
@@ -3228,6 +3505,8 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         sportmonks_client = make_sportmonks_client(settings, http)
         thestatsapi_live = await load_thestatsapi_live(settings, http)
         thestatsapi_client = make_thestatsapi_client(settings, http)
+        sportdb_live = await load_sportdb_live(settings, http)
+        sportdb_client = make_sportdb_client(settings, http)
         totalcorner_live = await load_totalcorner_live(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
@@ -3239,7 +3518,15 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
             if not fixture_id:
                 continue
             stats = await fixture_stats_with_sportmonks_fallback(
-                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
+                fixture,
+                api_football,
+                sportmonks_live,
+                sportmonks_client,
+                thestatsapi_live,
+                thestatsapi_client,
+                sportdb_live,
+                sportdb_client,
+                totalcorner_live,
             )
             score_home, score_away = extract_score(fixture)
             teams = fixture.get("teams", {})
@@ -3369,6 +3656,8 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
         sportmonks_client = make_sportmonks_client(settings, http)
         thestatsapi_live = await load_thestatsapi_live(settings, http)
         thestatsapi_client = make_thestatsapi_client(settings, http)
+        sportdb_live = await load_sportdb_live(settings, http)
+        sportdb_client = make_sportdb_client(settings, http)
         totalcorner_live = await load_totalcorner_live(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
@@ -3381,7 +3670,15 @@ async def force_verified_entry_cmd(update: Update, context: ContextTypes.DEFAULT
             if not fixture_id:
                 continue
             stats = await fixture_stats_with_sportmonks_fallback(
-                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
+                fixture,
+                api_football,
+                sportmonks_live,
+                sportmonks_client,
+                thestatsapi_live,
+                thestatsapi_client,
+                sportdb_live,
+                sportdb_client,
+                totalcorner_live,
             )
             score_home, score_away = extract_score(fixture)
             teams = fixture.get("teams", {})
@@ -3487,6 +3784,8 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
         sportmonks_client = make_sportmonks_client(settings, http)
         thestatsapi_live = await load_thestatsapi_live(settings, http)
         thestatsapi_client = make_thestatsapi_client(settings, http)
+        sportdb_live = await load_sportdb_live(settings, http)
+        sportdb_client = make_sportdb_client(settings, http)
         totalcorner_live = await load_totalcorner_live(settings, http)
         fixtures = await api_football.live_fixtures()
         if not fixtures:
@@ -3494,7 +3793,7 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         lines = [
-            f"Jogos ao vivo analisados: {min(len(fixtures), 10)} | TotalCorner live: {len(totalcorner_live)} | Sportmonks live: {len(sportmonks_live)} | TheStatsAPI live: {len(thestatsapi_live)}"
+            f"Jogos ao vivo analisados: {min(len(fixtures), 10)} | SportDB live: {len(sportdb_live)} | TotalCorner live: {len(totalcorner_live)} | Sportmonks live: {len(sportmonks_live)} | TheStatsAPI live: {len(thestatsapi_live)}"
         ]
         for fixture in fixtures[:10]:
             fixture_id = fixture.get("fixture", {}).get("id")
@@ -3508,7 +3807,15 @@ async def debug_live_filters_cmd(update: Update, context: ContextTypes.DEFAULT_T
                 lines.append(f"- {home} x {away}: sem fixture_id")
                 continue
             stats = await fixture_stats_with_sportmonks_fallback(
-                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
+                fixture,
+                api_football,
+                sportmonks_live,
+                sportmonks_client,
+                thestatsapi_live,
+                thestatsapi_client,
+                sportdb_live,
+                sportdb_client,
+                totalcorner_live,
             )
             required_confidence = settings.min_confidence
             flags = []
@@ -3558,9 +3865,11 @@ async def debug_odds_flow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
         sportmonks_client = make_sportmonks_client(settings, http)
         thestatsapi_live = await load_thestatsapi_live(settings, http)
         thestatsapi_client = make_thestatsapi_client(settings, http)
+        sportdb_live = await load_sportdb_live(settings, http)
+        sportdb_client = make_sportdb_client(settings, http)
 
         lines = [
-            f"API-Football live: {len(fixtures)} | Odds-API live: {len(odds_events)} | TotalCorner aceitos: {len(totalcorner_live)}"
+            f"API-Football live: {len(fixtures)} | Odds-API live: {len(odds_events)} | SportDB live: {len(sportdb_live)} | TotalCorner aceitos: {len(totalcorner_live)}"
         ]
         checked_odds = 0
         for fixture in fixtures[:10]:
@@ -3576,7 +3885,15 @@ async def debug_odds_flow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
                 continue
             event_id = str(event.get("id") or "")
             stats = await fixture_stats_with_sportmonks_fallback(
-                fixture, api_football, sportmonks_live, sportmonks_client, thestatsapi_live, thestatsapi_client, totalcorner_live
+                fixture,
+                api_football,
+                sportmonks_live,
+                sportmonks_client,
+                thestatsapi_live,
+                thestatsapi_client,
+                sportdb_live,
+                sportdb_client,
+                totalcorner_live,
             )
             if not has_actionable_stats(stats):
                 lines.append(f"- {home} x {away} {score} {minute or '?'}': odds match, sem stats acionaveis")
@@ -3722,6 +4039,114 @@ async def debug_thestatsapi_cmd(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as exc:
         logger.exception("Erro no diagnostico TheStatsAPI")
         await update.message.reply_text(f"Erro no diagnostico TheStatsAPI: {type(exc).__name__}")
+    finally:
+        await http.close()
+
+
+async def debug_sportdb_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Diagnosticando SportDB...")
+        if not settings.sportdb_key:
+            await update.message.reply_text("SPORTDB_KEY ausente no Railway.")
+            return
+        client = SportDBClient(settings.sportdb_key, http)
+        diagnostics = await client.diagnostic()
+        lines = ["Diagnostico SportDB:"]
+        for item in diagnostics:
+            suffix = f" | {item['message']}" if item["message"] else ""
+            lines.append(f"- {item['label']}: HTTP {item['status']} | itens={item['count']}{suffix}")
+
+        live = await client.football_live(settings.max_live_events)
+        if live:
+            accepted = [
+                match
+                for match in live
+                if not is_blocked_match_type(
+                    str(match.get("leagueName") or match.get("competitionName") or match.get("league") or ""),
+                    sportdb_team_names(match)[0],
+                    sportdb_team_names(match)[1],
+                )
+            ]
+            lines.append(f"\nSportDB jogos ao vivo parseados: {len(live)} | aceitos: {len(accepted)}")
+            for match in accepted[:10]:
+                home, away = sportdb_team_names(match)
+                match_id = (
+                    match.get("eventId")
+                    or match.get("id")
+                    or match.get("matchId")
+                    or match.get("event_id")
+                )
+                stats = {}
+                if match_id:
+                    try:
+                        stats = compact_sportdb_statistics(match, await client.match_stats(str(match_id)))
+                    except Exception as exc:
+                        lines.append(f"- {home or '?'} x {away or '?'}: stats erro {type(exc).__name__}")
+                        continue
+                stat_count = sum(len(values) for values in stats.values())
+                sample = compact_stats_summary(stats).replace("\n", " | ") if stats else "sem stats parseadas"
+                lines.append(f"- {home or '?'} x {away or '?'}: stats={stat_count} | {sample}")
+        await update.message.reply_text("\n".join(lines)[:3900])
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Erro HTTP no diagnostico SportDB: %s", exc.response.status_code)
+        await update.message.reply_text(f"Erro HTTP SportDB: {exc.response.status_code}")
+    except Exception as exc:
+        logger.exception("Erro no diagnostico SportDB")
+        await update.message.reply_text(f"Erro no diagnostico SportDB: {type(exc).__name__}")
+    finally:
+        await http.close()
+
+
+async def debug_sofascore_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    http = HttpJsonClient()
+    try:
+        await update.message.reply_text("Diagnosticando SofaScore...")
+        if not settings.sofascore_api_key:
+            await update.message.reply_text("SOFASCORE_API_KEY ausente no Railway.")
+            return
+        client = SofaScoreClient(settings.sofascore_api_key, http)
+        diagnostics = await client.diagnostic()
+        lines = ["Diagnostico SofaScore:"]
+        for item in diagnostics:
+            suffix = f" | {item['message']}" if item["message"] else ""
+            lines.append(f"- {item['label']}: HTTP {item['status']} | itens={item['count']}{suffix}")
+
+        live = await client.live_matches(settings.max_live_events)
+        if live:
+            accepted = [
+                match
+                for match in live
+                if not is_blocked_match_type(
+                    _sofascore_league_name(match),
+                    sofascore_team_names(match)[0],
+                    sofascore_team_names(match)[1],
+                )
+            ]
+            lines.append(f"\nSofaScore jogos ao vivo parseados: {len(live)} | aceitos: {len(accepted)}")
+            for match in accepted[:5]:
+                home, away = sofascore_team_names(match)
+                match_id = _sofascore_match_id(match)
+                stats = {}
+                if match_id:
+                    try:
+                        package = await client.match_package(match_id)
+                        stats = compact_sofascore_package(match, package)
+                    except Exception as exc:
+                        lines.append(f"- {home or '?'} x {away or '?'}: pacote erro {type(exc).__name__}")
+                        continue
+                stat_count = sum(len(values) for values in stats.values())
+                sample = compact_stats_summary(stats).replace("\n", " | ") if stats else "sem stats parseadas"
+                lines.append(f"- {home or '?'} x {away or '?'}: stats={stat_count} | {sample}")
+        await update.message.reply_text("\n".join(lines)[:3900])
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Erro HTTP no diagnostico SofaScore: %s", exc.response.status_code)
+        await update.message.reply_text(f"Erro HTTP SofaScore: {exc.response.status_code}")
+    except Exception as exc:
+        logger.exception("Erro no diagnostico SofaScore")
+        await update.message.reply_text(f"Erro no diagnostico SofaScore: {type(exc).__name__}")
     finally:
         await http.close()
 
@@ -3896,6 +4321,8 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("debug_live_filters", with_timeout(debug_live_filters_cmd, 45, "/debug_live_filters")))
     app.add_handler(CommandHandler("debug_odds_flow", with_timeout(debug_odds_flow_cmd, 60, "/debug_odds_flow")))
     app.add_handler(CommandHandler("debug_sportmonks", debug_sportmonks_cmd))
+    app.add_handler(CommandHandler("debug_sportdb", debug_sportdb_cmd))
+    app.add_handler(CommandHandler("debug_sofascore", debug_sofascore_cmd))
     app.add_handler(CommandHandler("debug_api_football_stats", debug_api_football_stats_cmd))
     app.add_handler(CommandHandler("debug_thestatsapi", debug_thestatsapi_cmd))
     app.add_handler(CommandHandler("debug_totalcorner", debug_totalcorner_cmd))

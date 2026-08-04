@@ -251,6 +251,254 @@ class TheStatsApiClient:
         return results
 
 
+class SportDBClient:
+    base_url = "https://api.sportdb.dev/api/flashscore"
+    live_cache_ttl_seconds = 25
+    _live_cache: list[dict[str, Any]] = []
+    _live_cache_ts: float = 0.0
+
+    def __init__(self, api_key: str, http: HttpJsonClient) -> None:
+        self.api_key = api_key
+        self.http = http
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {"X-API-Key": self.api_key}
+
+    @staticmethod
+    def _items(data: Any) -> list[dict[str, Any]]:
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if not isinstance(data, dict):
+            return []
+        for key in ("data", "events", "matches", "results", "response"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return []
+
+    @classmethod
+    def _cache_age(cls) -> float:
+        return time.time() - cls._live_cache_ts if cls._live_cache_ts else 10**9
+
+    async def football_live(self, limit: int = 100) -> list[dict[str, Any]]:
+        if self._live_cache and self._cache_age() <= self.live_cache_ttl_seconds:
+            return self._live_cache[:limit]
+        data = await self.http.get_json(f"{self.base_url}/football/live", headers=self.headers)
+        items = self._items(data)
+        self.__class__._live_cache = items
+        self.__class__._live_cache_ts = time.time()
+        return items[:limit]
+
+    async def match_stats(self, match_id: str) -> dict[str, Any] | list[dict[str, Any]] | None:
+        data = await self.http.get_json(f"{self.base_url}/match/{match_id}/stats", headers=self.headers)
+        return data
+
+    async def diagnostic(self) -> list[dict[str, Any]]:
+        results = []
+        status, data = await self.http.get_status_json(f"{self.base_url}/football/live", headers=self.headers)
+        live_items = self._items(data)
+        results.append(
+            {
+                "label": "football/live",
+                "status": status,
+                "count": len(live_items),
+                "message": str(data.get("message") or data.get("error") or "")[:300] if isinstance(data, dict) else "",
+                "sample": live_items[0] if live_items else None,
+            }
+        )
+        sample_id = None
+        if live_items:
+            sample = live_items[0]
+            sample_id = sample.get("eventId") or sample.get("id") or sample.get("matchId") or sample.get("event_id")
+        if sample_id:
+            stats_status, stats_data = await self.http.get_status_json(
+                f"{self.base_url}/match/{sample_id}/stats",
+                headers=self.headers,
+            )
+            stat_items = self._items(stats_data)
+            results.append(
+                {
+                    "label": "match/{id}/stats",
+                    "status": stats_status,
+                    "count": len(stat_items),
+                    "message": str(stats_data.get("message") or stats_data.get("error") or "")[:300]
+                    if isinstance(stats_data, dict)
+                    else "",
+                    "sample": stat_items[0] if stat_items else None,
+                }
+            )
+        return results
+
+
+class SofaScoreClient:
+    base_url = "https://zylalabs.com/api/12787/sofascore+-+live+api"
+    live_cache_ttl_seconds = 60
+    stats_cache_ttl_seconds = 120
+    package_cache_ttl_seconds = 120
+    _live_cache: list[dict[str, Any]] = []
+    _live_cache_ts: float = 0.0
+    _stats_cache: dict[str, Any] = {}
+    _stats_cache_ts: dict[str, float] = {}
+    _package_cache: dict[str, dict[str, Any]] = {}
+    _package_cache_ts: dict[str, float] = {}
+    match_package_endpoints = {
+        "details": "25094/get+match+details",
+        "statistics": "25099/get+match+statistics",
+        "incidents": "25100/get+match+incidents",
+        "lineups": "25096/get+match+lineups",
+        "odds": "25097/get+match+odds",
+        "shotmap": "25845/get+match+shotmap",
+        "pregame_form": "25842/get+match+pregame+form",
+        "best_players": "25840/get+match+best+players",
+        "player_average_positions": "25844/get+match+player+average+positions",
+    }
+
+    def __init__(self, api_key: str, http: HttpJsonClient) -> None:
+        self.api_key = api_key
+        self.http = http
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}"}
+
+    @staticmethod
+    def _items(data: Any) -> list[dict[str, Any]]:
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if not isinstance(data, dict):
+            return []
+        for key in ("data", "events", "matches", "results", "response"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return []
+
+    @classmethod
+    def _live_cache_age(cls) -> float:
+        return time.time() - cls._live_cache_ts if cls._live_cache_ts else 10**9
+
+    @classmethod
+    def _stats_cache_age(cls, match_id: str) -> float:
+        ts = cls._stats_cache_ts.get(match_id)
+        return time.time() - ts if ts else 10**9
+
+    @classmethod
+    def _package_cache_age(cls, match_id: str) -> float:
+        ts = cls._package_cache_ts.get(match_id)
+        return time.time() - ts if ts else 10**9
+
+    async def live_matches(self, limit: int = 100) -> list[dict[str, Any]]:
+        if self._live_cache and self._live_cache_age() <= self.live_cache_ttl_seconds:
+            return self._live_cache[:limit]
+        data = await self.http.get_json(
+            f"{self.base_url}/25092/get+live+matches",
+            params={"sport_slug": "football"},
+            headers=self.headers,
+        )
+        items = self._items(data)
+        self.__class__._live_cache = items
+        self.__class__._live_cache_ts = time.time()
+        return items[:limit]
+
+    async def match_statistics(self, match_id: str) -> dict[str, Any] | list[dict[str, Any]] | None:
+        cache_key = str(match_id)
+        if cache_key in self._stats_cache and self._stats_cache_age(cache_key) <= self.stats_cache_ttl_seconds:
+            return self._stats_cache[cache_key]
+        data = await self.http.get_json(
+            f"{self.base_url}/25099/get+match+statistics",
+            params={"match_id": cache_key},
+            headers=self.headers,
+        )
+        self.__class__._stats_cache[cache_key] = data
+        self.__class__._stats_cache_ts[cache_key] = time.time()
+        return data
+
+    async def _match_endpoint(self, match_id: str, name: str, path: str) -> tuple[str, dict[str, Any]]:
+        try:
+            data = await self.http.get_json(
+                f"{self.base_url}/{path}",
+                params={"match_id": str(match_id)},
+                headers=self.headers,
+            )
+            return name, {"ok": True, "data": data}
+        except httpx.HTTPStatusError as exc:
+            return name, {
+                "ok": False,
+                "status": exc.response.status_code,
+                "error": str(exc)[:300],
+                "data": None,
+            }
+        except Exception as exc:
+            return name, {"ok": False, "status": None, "error": str(exc)[:300], "data": None}
+
+    async def match_package(self, match_id: str) -> dict[str, Any]:
+        cache_key = str(match_id)
+        if cache_key in self._package_cache and self._package_cache_age(cache_key) <= self.package_cache_ttl_seconds:
+            return self._package_cache[cache_key]
+
+        pairs = await asyncio.gather(
+            *[
+                self._match_endpoint(cache_key, name, path)
+                for name, path in self.match_package_endpoints.items()
+            ]
+        )
+        sources = {name: payload for name, payload in pairs}
+        package = {
+            "provider": "zyla_sofascore",
+            "match_id": cache_key,
+            "coverage": {
+                name: bool(payload.get("ok") and payload.get("data") is not None)
+                for name, payload in sources.items()
+            },
+            "sources": sources,
+        }
+        self.__class__._package_cache[cache_key] = package
+        self.__class__._package_cache_ts[cache_key] = time.time()
+        if sources.get("statistics", {}).get("ok"):
+            self.__class__._stats_cache[cache_key] = sources["statistics"].get("data")
+            self.__class__._stats_cache_ts[cache_key] = time.time()
+        return package
+
+    async def diagnostic(self) -> list[dict[str, Any]]:
+        results = []
+        status, data = await self.http.get_status_json(
+            f"{self.base_url}/25092/get+live+matches",
+            params={"sport_slug": "football"},
+            headers=self.headers,
+        )
+        live_items = self._items(data)
+        results.append(
+            {
+                "label": "get live matches",
+                "status": status,
+                "count": len(live_items),
+                "message": str(data.get("message") or data.get("error") or "")[:300] if isinstance(data, dict) else "",
+                "sample": live_items[0] if live_items else None,
+            }
+        )
+        sample_id = None
+        if live_items:
+            sample = live_items[0]
+            sample_id = sample.get("id") or sample.get("eventId") or sample.get("matchId") or sample.get("event_id")
+        if sample_id:
+            package = await self.match_package(str(sample_id))
+            stat_data = package.get("sources", {}).get("statistics", {}).get("data")
+            stat_items = self._items(stat_data)
+            ok_sources = [name for name, ok in package.get("coverage", {}).items() if ok]
+            failed_sources = [name for name, ok in package.get("coverage", {}).items() if not ok]
+            results.append(
+                {
+                    "label": "get match package completo",
+                    "status": 200 if ok_sources else 500,
+                    "count": len(ok_sources),
+                    "message": f"ok={','.join(ok_sources)} | falhou={','.join(failed_sources)}",
+                    "sample": stat_items[0] if stat_items else None,
+                }
+            )
+        return results
+
+
 class TotalCornerClient:
     base_url = "https://api.totalcorner.com/v1"
     # TotalCorner can return 0/1 rows when unsupported column combinations are

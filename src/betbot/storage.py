@@ -134,6 +134,11 @@ class Storage:
                 market text,
                 selection text,
                 line real,
+                odd real,
+                confidence integer,
+                stake text,
+                strategy text,
+                analysis_json text,
                 bfbm_event_name text,
                 bfbm_market_name text,
                 bfbm_selection_name text,
@@ -211,6 +216,16 @@ class Storage:
         ):
             if column not in market_columns:
                 self.conn.execute(f"alter table bfbm_markets add column {column} {ddl_type}")
+        audit_columns = {row["name"] for row in self.conn.execute("pragma table_info(bfbm_export_audit)").fetchall()}
+        for column, ddl_type in (
+            ("odd", "real"),
+            ("confidence", "integer"),
+            ("stake", "text"),
+            ("strategy", "text"),
+            ("analysis_json", "text"),
+        ):
+            if column not in audit_columns:
+                self.conn.execute(f"alter table bfbm_export_audit add column {column} {ddl_type}")
         bet_columns = {row["name"] for row in self.conn.execute("pragma table_info(bfbm_bet_notifications)").fetchall()}
         for column, ddl_type in (
             ("placed_at", "text"),
@@ -298,6 +313,11 @@ class Storage:
                     market = ?,
                     selection = ?,
                     line = ?,
+                    odd = ?,
+                    confidence = ?,
+                    stake = ?,
+                    strategy = ?,
+                    analysis_json = ?,
                     bfbm_event_name = ?,
                     bfbm_market_name = ?,
                     bfbm_selection_name = ?,
@@ -319,6 +339,11 @@ class Storage:
                     row.get("market", ""),
                     row.get("selection", ""),
                     row.get("line"),
+                    row.get("odd"),
+                    row.get("confidence"),
+                    row.get("stake", ""),
+                    row.get("strategy", ""),
+                    str(row.get("analysis_json") or ""),
                     row.get("bfbm_event_name", ""),
                     row.get("bfbm_market_name", ""),
                     row.get("bfbm_selection_name", ""),
@@ -341,15 +366,21 @@ class Storage:
             """
             insert into bfbm_export_audit (
                 alert_id, alert_key, endpoint, status, reason, home, away, event_name,
-                market, selection, line, bfbm_event_name, bfbm_market_name,
+                market, selection, line, odd, confidence, stake, strategy, analysis_json,
+                bfbm_event_name, bfbm_market_name,
                 bfbm_selection_name, bfbm_event_id, bfbm_market_id, bfbm_selection_id,
                 bfbm_start_time, raw_json
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(alert_id, endpoint) do update set
                 last_seen_at = current_timestamp,
                 seen_count = seen_count + 1,
                 status = excluded.status,
                 reason = excluded.reason,
+                odd = coalesce(excluded.odd, odd),
+                confidence = coalesce(excluded.confidence, confidence),
+                stake = coalesce(nullif(excluded.stake, ''), stake),
+                strategy = coalesce(nullif(excluded.strategy, ''), strategy),
+                analysis_json = coalesce(nullif(excluded.analysis_json, ''), analysis_json),
                 bfbm_event_name = excluded.bfbm_event_name,
                 bfbm_market_name = excluded.bfbm_market_name,
                 bfbm_selection_name = excluded.bfbm_selection_name,
@@ -372,6 +403,11 @@ class Storage:
                     row.get("market", ""),
                     row.get("selection", ""),
                     row.get("line"),
+                    row.get("odd"),
+                    row.get("confidence"),
+                    row.get("stake", ""),
+                    row.get("strategy", ""),
+                    str(row.get("analysis_json") or ""),
                     row.get("bfbm_event_name", ""),
                     row.get("bfbm_market_name", ""),
                     row.get("bfbm_selection_name", ""),
@@ -467,6 +503,29 @@ class Storage:
               and e.bfbm_selection_id = ?
               and a.user_action != 'IGNORED'
             order by e.last_seen_at desc, e.id desc
+            limit 1
+            """,
+            (market_id, selection_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_alert(self, alert_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute("select * from alerts where id = ?", (alert_id,)).fetchone()
+        return dict(row) if row else None
+
+    def find_bfbm_export_audit_by_order(self, market_id: str, selection_id: str) -> dict[str, Any] | None:
+        market_id = str(market_id or "").strip()
+        selection_id = str(selection_id or "").strip()
+        if not market_id or market_id == "0" or not selection_id or selection_id == "0":
+            return None
+        row = self.conn.execute(
+            """
+            select *
+            from bfbm_export_audit
+            where bfbm_market_id = ?
+              and bfbm_selection_id = ?
+              and status = 'EXPORTED'
+            order by last_seen_at desc, id desc
             limit 1
             """,
             (market_id, selection_id),
@@ -917,6 +976,11 @@ class Storage:
                        coalesce(nullif(a.market, ''), e.market) as market,
                        coalesce(nullif(a.selection, ''), e.selection) as selection,
                        coalesce(a.line, e.line) as line,
+                       coalesce(a.odd, e.odd) as odd,
+                       coalesce(a.confidence, e.confidence) as confidence,
+                       coalesce(nullif(a.stake, ''), e.stake) as stake,
+                       coalesce(nullif(a.strategy, ''), e.strategy) as strategy,
+                       coalesce(nullif(a.analysis_json, ''), e.analysis_json) as analysis_json,
                        e.bfbm_event_name, e.bfbm_market_name, e.bfbm_selection_name,
                        e.bfbm_event_id, e.bfbm_market_id, e.bfbm_selection_id,
                        e.bfbm_start_time, a.status as alert_status, a.user_action
@@ -1033,33 +1097,42 @@ class Storage:
                 coalesce(nullif(b.settled_at, ''), a.settled_at, '') as settled_at,
                 coalesce(nullif(b.placed_at_iso, ''), nullif(b.placed_at, ''), b.created_at) as placed_at,
                 b.bet_id,
-                coalesce(b.alert_id, a.id) as alert_id,
-                coalesce(nullif(b.market_id, ''), a.betfair_market_id, '') as market_id,
-                coalesce(nullif(b.selection_id, ''), a.betfair_selection_id, '') as selection_id,
+                coalesce(b.alert_id, a.id, e.alert_id) as alert_id,
+                coalesce(nullif(b.market_id, ''), a.betfair_market_id, e.bfbm_market_id, '') as market_id,
+                coalesce(nullif(b.selection_id, ''), a.betfair_selection_id, e.bfbm_selection_id, '') as selection_id,
                 coalesce(nullif(b.handicap, ''), '') as handicap,
                 coalesce(nullif(b.side, ''), 'BACK') as side,
                 coalesce(nullif(b.order_status, ''), '') as order_status,
-                coalesce(b.price, a.odd, 0) as price,
+                coalesce(b.price, a.odd, e.odd, 0) as price,
                 replace(coalesce(nullif(b.size_matched, ''), '0'), ',', '.') + 0 as stake,
                 coalesce(b.profit, 0) as profit,
-                coalesce(nullif(b.strategy, ''), a.strategy, '') as strategy,
-                coalesce(nullif(a.home || ' x ' || a.away, ' x '), '') as event_name,
-                coalesce(a.home, '') as home,
-                coalesce(a.away, '') as away,
+                coalesce(nullif(b.strategy, ''), a.strategy, e.strategy, '') as strategy,
+                coalesce(nullif(a.home || ' x ' || a.away, ' x '), e.bfbm_event_name, e.event_name, '') as event_name,
+                coalesce(a.home, e.home, '') as home,
+                coalesce(a.away, e.away, '') as away,
                 coalesce(a.minute, 0) as minute,
-                coalesce(a.market, '') as market,
-                coalesce(a.selection, '') as selection,
-                a.line,
-                coalesce(a.confidence, 0) as confidence,
-                coalesce(a.reason, '') as reason,
+                coalesce(a.market, e.bfbm_market_name, e.market, '') as market,
+                coalesce(a.selection, e.bfbm_selection_name, e.selection, '') as selection,
+                coalesce(a.line, e.line) as line,
+                coalesce(a.confidence, e.confidence, 0) as confidence,
+                coalesce(a.reason, e.reason, '') as reason,
                 coalesce(a.status, '') as alert_status,
                 coalesce(a.user_action, '') as user_action,
                 coalesce(a.result_note, '') as result_note
-                ,coalesce(b.raw_line, '') as raw_line
+                ,coalesce(nullif(b.raw_line, ''), e.bfbm_event_name || '\\' || e.bfbm_market_name || '\\' || e.bfbm_selection_name, '') as raw_line
             from bfbm_bet_notifications b
             left join alerts a
               on a.id = b.alert_id
               or (b.bet_id != '' and a.bfbm_bet_id = b.bet_id)
+            left join bfbm_export_audit e
+              on e.id = (
+                  select e2.id
+                  from bfbm_export_audit e2
+                  where e2.bfbm_market_id = coalesce(nullif(b.market_id, ''), a.betfair_market_id, '')
+                    and e2.bfbm_selection_id = coalesce(nullif(b.selection_id, ''), a.betfair_selection_id, '')
+                  order by e2.last_seen_at desc, e2.id desc
+                  limit 1
+              )
             where b.profit is not null
               and {where_sql}
             order by sort_at desc, b.id desc
