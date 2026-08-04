@@ -5,8 +5,10 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import sys
 import threading
+import time
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -48,6 +50,25 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
 logger = logging.getLogger("betbot")
 BFBM_TOTALCORNER_MIN_LIVE_EVENTS = 150
+_BFBM_LIVE_ALERTS_CACHE: dict[str, Any] = {"key": None, "ts": 0.0, "alerts": []}
+_BFBM_LIVE_ALERTS_CACHE_LOCK = threading.Lock()
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name)
+    try:
+        value = int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _bfbm_live_alert_cache_seconds() -> int:
+    return _env_int("BFBM_LIVE_ALERT_CACHE_SECONDS", 120, 30, 600)
+
+
+def _sofascore_max_packages_per_cycle() -> int:
+    return _env_int("SOFASCORE_MAX_PACKAGES_PER_CYCLE", 8, 1, 50)
 
 
 MARKET_LABELS = {
@@ -699,6 +720,8 @@ async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, stora
             return []
         snapshots: list[GameSnapshot] = []
         learned_aliases: list[dict] = []
+        package_count = 0
+        max_packages = _sofascore_max_packages_per_cycle()
         for index, match in enumerate(live):
             home, away = sofascore_team_names(match)
             if not home or not away:
@@ -723,6 +746,10 @@ async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, stora
                     }
                 )
             match_id = _sofascore_match_id(match) or str(index)
+            if package_count >= max_packages:
+                logger.info("Limite de pacotes SofaScore por ciclo atingido: %s.", max_packages)
+                break
+            package_count += 1
             try:
                 package = await sofascore_client.match_package(match_id)
                 stats = compact_sofascore_package(match, package)
@@ -1034,6 +1061,32 @@ async def build_live_bfbm_candidate_alerts(settings, limit: int = 12) -> list[di
     finally:
         storage.close()
         await http.close()
+
+
+async def build_live_bfbm_candidate_alerts_cached(settings, limit: int = 12) -> list[dict[str, Any]]:
+    ttl_seconds = _bfbm_live_alert_cache_seconds()
+    cache_key = (
+        str(getattr(settings, "database_path", "")),
+        int(limit),
+        bool(getattr(settings, "bfbm_export", False)),
+        bool(getattr(settings, "sofascore_strict", False)),
+        bool(getattr(settings, "sofascore_api_key", "")),
+    )
+    now = time.time()
+    with _BFBM_LIVE_ALERTS_CACHE_LOCK:
+        if (
+            _BFBM_LIVE_ALERTS_CACHE.get("key") == cache_key
+            and now - float(_BFBM_LIVE_ALERTS_CACHE.get("ts") or 0.0) <= ttl_seconds
+        ):
+            return [dict(alert) for alert in _BFBM_LIVE_ALERTS_CACHE.get("alerts", [])]
+
+    alerts = await build_live_bfbm_candidate_alerts(settings, limit=limit)
+
+    with _BFBM_LIVE_ALERTS_CACHE_LOCK:
+        _BFBM_LIVE_ALERTS_CACHE["key"] = cache_key
+        _BFBM_LIVE_ALERTS_CACHE["ts"] = time.time()
+        _BFBM_LIVE_ALERTS_CACHE["alerts"] = [dict(alert) for alert in alerts]
+    return alerts
 
 
 async def create_live_bfbm_zero_zero_goal_tests(settings, count: int = 4) -> tuple[int, list[str]]:
@@ -2304,7 +2357,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                     "não",
                 }
                 if live_candidates_enabled:
-                    live_alerts = asyncio.run(build_live_bfbm_candidate_alerts(settings, limit=tips_limit))
+                    live_alerts = asyncio.run(build_live_bfbm_candidate_alerts_cached(settings, limit=tips_limit))
                     if live_alerts:
                         alerts = _merge_bfbm_export_alerts(live_alerts, alerts, limit=tips_limit)
                 rows, audits = full_rows_with_audit(

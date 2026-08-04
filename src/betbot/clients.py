@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name)
+    try:
+        value = int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
 
 
 class HttpJsonClient:
@@ -333,9 +343,9 @@ class SportDBClient:
 
 class SofaScoreClient:
     base_url = "https://zylalabs.com/api/12787/sofascore+-+live+api"
-    live_cache_ttl_seconds = 60
-    stats_cache_ttl_seconds = 120
-    package_cache_ttl_seconds = 120
+    live_cache_ttl_seconds = _env_int("SOFASCORE_LIVE_CACHE_SECONDS", 90, 30, 600)
+    stats_cache_ttl_seconds = _env_int("SOFASCORE_STATS_CACHE_SECONDS", 300, 60, 900)
+    package_cache_ttl_seconds = _env_int("SOFASCORE_MATCH_PACKAGE_CACHE_SECONDS", 300, 60, 900)
     _live_cache: list[dict[str, Any]] = []
     _live_cache_ts: float = 0.0
     _stats_cache: dict[str, Any] = {}
