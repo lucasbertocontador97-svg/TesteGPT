@@ -52,6 +52,16 @@ logger = logging.getLogger("betbot")
 BFBM_TOTALCORNER_MIN_LIVE_EVENTS = 150
 _BFBM_LIVE_ALERTS_CACHE: dict[str, Any] = {"key": None, "ts": 0.0, "alerts": []}
 _BFBM_LIVE_ALERTS_CACHE_LOCK = threading.Lock()
+BFBM_ANALYSIS_MARKET_FAMILIES = {
+    "asian_handicap",
+    "btts",
+    "corners",
+    "double_chance",
+    "draw_no_bet",
+    "first_half_goals",
+    "goals",
+    "match_odds",
+}
 
 
 def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -69,6 +79,22 @@ def _bfbm_live_alert_cache_seconds() -> int:
 
 def _sofascore_max_packages_per_cycle() -> int:
     return _env_int("SOFASCORE_MAX_PACKAGES_PER_CYCLE", 8, 1, 50)
+
+
+def _bfbm_actionable_catalog_rows(catalog_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in catalog_rows:
+        status = str(row.get("status") or "").casefold()
+        if "closed" in status or "fechado" in status:
+            continue
+        if row_market_family(row) not in BFBM_ANALYSIS_MARKET_FAMILIES:
+            continue
+        if not str(row.get("event_name") or "").strip():
+            continue
+        if not str(row.get("market_id") or row.get("MarketId") or "").strip():
+            continue
+        rows.append(row)
+    return rows
 
 
 MARKET_LABELS = {
@@ -597,12 +623,7 @@ async def bfbm_totalcorner_overlap(settings) -> dict:
         else:
             accepted.append(match)
 
-    active_catalog = [
-        row
-        for row in catalog_rows
-        if "closed" not in str(row.get("status") or "").casefold()
-        and "fechado" not in str(row.get("status") or "").casefold()
-    ]
+    active_catalog = _bfbm_actionable_catalog_rows(catalog_rows)
 
     matched: list[dict] = []
     unmatched: list[dict] = []
@@ -710,6 +731,10 @@ async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, stora
     catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
     if not catalog_rows:
         return []
+    actionable_catalog = _bfbm_actionable_catalog_rows(catalog_rows)
+    if not actionable_catalog:
+        logger.info("BFBM sem mercados acionaveis para analise ao vivo.")
+        return []
     if getattr(settings, "sofascore_strict", True):
         if not settings.sofascore_api_key:
             logger.warning("BFBM strict SofaScore ativo, mas SOFASCORE_API_KEY nao esta configurada.")
@@ -729,7 +754,7 @@ async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, stora
             event_label = f"{home} x {away}"
             best_score = 0
             best_event_name = ""
-            for row in catalog_rows:
+            for row in actionable_catalog:
                 score = event_score_for_row(event_label, row)
                 if score > best_score:
                     best_score = score
@@ -793,7 +818,7 @@ async def build_bfbm_totalcorner_snapshots(settings, http: HttpJsonClient, stora
         event_label = _tc_event_label(match)
         best_score = 0
         best_event_name = ""
-        for row in catalog_rows:
+        for row in actionable_catalog:
             score = event_score_for_row(event_label, row)
             if score > best_score:
                 best_score = score
@@ -966,15 +991,7 @@ async def build_live_bfbm_candidate_alerts(settings, limit: int = 12) -> list[di
         catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
         if not catalog_rows:
             return []
-        active_catalog = [
-            row
-            for row in catalog_rows
-            # In-play markets are frequently SUSPENDED for seconds after goals,
-            # corners, VAR checks, and attacks. Keep them exportable so BFBM can
-            # place the bet as soon as the market reopens; only final closed
-            # markets are not actionable.
-            if str(row.get("status") or "").upper() not in {"CLOSED", "FECHADO"}
-        ]
+        active_catalog = _bfbm_actionable_catalog_rows(catalog_rows)
         if not active_catalog:
             return []
         snapshots = await build_bfbm_totalcorner_snapshots(settings, http, storage)
