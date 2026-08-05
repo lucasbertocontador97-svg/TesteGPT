@@ -208,6 +208,20 @@ def _live_analysis_payload(
     }
 
 
+def _ai_confirms_signal(idea, signal) -> bool:
+    if not bool(getattr(idea, "should_check_odds", False)):
+        return False
+    if str(getattr(idea, "market_family", "")) != str(getattr(signal, "market_family", "")):
+        return False
+    if str(getattr(idea, "selection", "")) != str(getattr(signal, "selection", "")):
+        return False
+    idea_line = getattr(idea, "line", None)
+    signal_line = getattr(signal, "line", None)
+    if idea_line is None or signal_line is None:
+        return idea_line is None and signal_line is None
+    return abs(float(idea_line) - float(signal_line)) <= 0.01
+
+
 def _record_bfbm_candidate_audit(
     storage: Storage,
     game: GameSnapshot,
@@ -963,6 +977,25 @@ def _bfbm_export_dedupe_key(alert: dict[str, Any]) -> tuple[str, str, str, str, 
     )
 
 
+def _alert_has_ai_consensus(alert: dict[str, Any]) -> bool:
+    raw_analysis = alert.get("analysis_json")
+    if isinstance(raw_analysis, dict):
+        analysis = raw_analysis
+    else:
+        try:
+            analysis = json.loads(str(raw_analysis or "{}"))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return False
+    if not isinstance(analysis, dict):
+        return False
+    final_decision = analysis.get("final_decision")
+    return isinstance(final_decision, dict) and final_decision.get("ai_checked") is True
+
+
+def _only_ai_consensus_alerts(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [alert for alert in alerts if _alert_has_ai_consensus(alert)]
+
+
 def _merge_bfbm_export_alerts(
     live_alerts: list[dict[str, Any]],
     stored_alerts: list[dict[str, Any]],
@@ -971,7 +1004,7 @@ def _merge_bfbm_export_alerts(
 ) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str, str]] = set()
-    for alert in [*live_alerts, *stored_alerts]:
+    for alert in _only_ai_consensus_alerts([*live_alerts, *stored_alerts]):
         key = _bfbm_export_dedupe_key(alert)
         if key in seen:
             continue
@@ -1036,6 +1069,34 @@ async def build_live_bfbm_candidate_alerts(settings, limit: int = 12) -> list[di
                     reason="live_csv_approved_without_exact_bfbm_market",
                 )
                 continue
+            try:
+                idea = await suggest_market_without_odds(
+                    game,
+                    api_key=settings.openai_api_key,
+                    model=settings.openai_model,
+                    min_confidence=required_confidence,
+                )
+            except Exception as exc:
+                logger.exception("IA falhou ao validar candidato BFBM de %s x %s", game.home, game.away)
+                _record_bfbm_candidate_audit(
+                    storage,
+                    game,
+                    signal,
+                    status="SKIPPED",
+                    reason=f"ai_validation_error:{type(exc).__name__}",
+                    bfbm_market=bfbm_market,
+                )
+                continue
+            if not _ai_confirms_signal(idea, signal):
+                _record_bfbm_candidate_audit(
+                    storage,
+                    game,
+                    signal,
+                    status="SKIPPED",
+                    reason=f"ai_consensus_rejected:{idea.reason}",
+                    bfbm_market=bfbm_market,
+                )
+                continue
             alert = _with_bfbm_export_ids(
                 _alert_dict_from_live_bfbm_signal(
                     game,
@@ -1046,6 +1107,21 @@ async def build_live_bfbm_candidate_alerts(settings, limit: int = 12) -> list[di
                 settings,
                 bfbm_market,
             )
+            analysis = json.loads(str(alert.get("analysis_json") or "{}"))
+            analysis["final_decision"] = {
+                "market_family": signal.market_family,
+                "selection": signal.selection,
+                "line": signal.line,
+                "confidence": max(signal.confidence, idea.confidence),
+                "stake": idea.stake,
+                "reason": f"{signal.reason} IA: {idea.reason}",
+                "ai_checked": True,
+                "ai_reason": idea.reason,
+            }
+            alert["analysis_json"] = json.dumps(analysis, ensure_ascii=False)
+            alert["confidence"] = max(signal.confidence, idea.confidence)
+            alert["stake"] = idea.stake
+            alert["reason"] = f"{signal.reason} IA: {idea.reason}"
             learning = storage.bfbm_learning_decision(
                 str(alert.get("market") or ""),
                 str(alert.get("selection") or ""),
@@ -2361,6 +2437,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
             finally:
                 storage.close()
+            alerts = _only_ai_consensus_alerts(alerts)
             if parsed.path in {"/bfbm/live-full.csv", "/bfbm/tips.csv"}:
                 require_ids = str(query.get("ids", [""])[0]).strip().lower() in {"1", "true", "yes", "sim"} or str(
                     query.get("require_ids", [""])[0]
@@ -2897,29 +2974,52 @@ async def process_once(settings, storage: Storage, *, send_alerts: bool = True) 
                     reason="candidate_has_bfbm_market",
                     bfbm_market=bfbm_market,
                 )
-            idea = await suggest_market_without_odds(
-                game,
-                api_key=settings.openai_api_key,
-                model=settings.openai_model,
-                min_confidence=required_confidence,
-            )
+            try:
+                idea = await suggest_market_without_odds(
+                    game,
+                    api_key=settings.openai_api_key,
+                    model=settings.openai_model,
+                    min_confidence=required_confidence,
+                )
+            except Exception as exc:
+                logger.exception("IA falhou ao validar sinal de %s x %s", game.home, game.away)
+                if bfbm_source:
+                    _record_bfbm_candidate_audit(
+                        storage,
+                        game,
+                        math_signal,
+                        status="SKIPPED",
+                        reason=f"ai_validation_error:{type(exc).__name__}",
+                        bfbm_market=bfbm_market,
+                    )
+                continue
             target_family = math_signal.market_family
             target_selection = math_signal.selection
             target_line = math_signal.line
             target_confidence = math_signal.confidence
             target_reason = math_signal.reason
             target_stake = "baixa"
-            if idea.should_check_odds and idea.market_family == math_signal.market_family and idea.selection == math_signal.selection:
+            if _ai_confirms_signal(idea, math_signal):
                 target_confidence = max(math_signal.confidence, idea.confidence)
                 target_reason = f"{math_signal.reason} IA: {idea.reason}"
                 target_stake = idea.stake
             else:
                 logger.info(
-                    "IA nao confirmou o sinal matematico em %s x %s; seguindo pelo motor matematico. IA: %s",
+                    "IA vetou o sinal matematico em %s x %s. IA: %s",
                     game.home,
                     game.away,
                     idea.reason,
                 )
+                if bfbm_source:
+                    _record_bfbm_candidate_audit(
+                        storage,
+                        game,
+                        math_signal,
+                        status="SKIPPED",
+                        reason=f"ai_consensus_rejected:{idea.reason}",
+                        bfbm_market=bfbm_market,
+                    )
+                continue
             decision_analysis = _live_analysis_payload(
                 game,
                 math_signal,
@@ -3640,20 +3740,18 @@ async def official_no_odds_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 model=settings.openai_model,
                 min_confidence=required_confidence,
             )
-            if idea.should_check_odds and idea.market_family == math_signal.market_family and idea.selection == math_signal.selection:
+            if _ai_confirms_signal(idea, math_signal):
                 final_confidence = max(math_signal.confidence, idea.confidence)
                 final_reason = f"{math_signal.reason} IA: {idea.reason}"
                 final_stake = idea.stake
             else:
                 logger.info(
-                    "Entrada sem odds seguindo motor matematico em %s x %s; IA nao confirmou: %s",
+                    "Entrada sem odds vetada pela IA em %s x %s: %s",
                     game.home,
                     game.away,
                     idea.reason,
                 )
-                final_confidence = math_signal.confidence
-                final_reason = math_signal.reason
-                final_stake = "baixa"
+                continue
 
             market_label_text = market_label(math_signal.market_family, math_signal.selection)
             final_line = math_signal.line

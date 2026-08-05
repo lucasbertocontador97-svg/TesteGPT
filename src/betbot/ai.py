@@ -167,10 +167,12 @@ async def suggest_market_without_odds(
             "stats": game.stats,
             "analysis_package": game.analysis_package,
         },
-        "allowed_market_families": ["goals", "corners"],
+        "allowed_market_families": ["goals", "first_half_goals", "corners", "btts"],
         "allowed_selections": [
             "over",
             "under",
+            "yes",
+            "no",
         ],
         "line_guidance": {
             "goals": "Escolha uma linha clara como 0.5, 1.5, 2.5, 3.5 ou linha asiatica como 1.0, 2.0, 3.0.",
@@ -189,11 +191,13 @@ async def suggest_market_without_odds(
             "Explique citando dados concretos das estatisticas recebidas quando existirem.",
             "Nao invente odds.",
             "Use goals para mercados de gols e corners para escanteios.",
+            "Use first_half_goals exclusivamente para gols no primeiro tempo.",
+            "Use btts com selection yes ou no para ambos os times marcam.",
         ],
         "output_schema": {
             "should_check_odds": "boolean",
-            "market_family": "goals|corners|none",
-            "selection": "over|under|none",
+            "market_family": "goals|first_half_goals|corners|btts|none",
+            "selection": "over|under|yes|no|none",
             "line": "number or null",
             "confidence": "integer 0-100",
             "reason": "explicacao curta em portugues",
@@ -225,9 +229,15 @@ async def suggest_market_without_odds(
         line = float(data["line"]) if data.get("line") is not None else None
     except (TypeError, ValueError):
         line = None
-    if family not in {"goals", "corners"} or selection not in {"over", "under"}:
+    valid_pairs = {
+        "goals": {"over", "under"},
+        "first_half_goals": {"over", "under"},
+        "corners": {"over", "under"},
+        "btts": {"yes", "no"},
+    }
+    if family not in valid_pairs or selection not in valid_pairs[family]:
         should_check = False
-    if line is None:
+    if family != "btts" and line is None:
         should_check = False
     return MarketIdea(
         should_check,
