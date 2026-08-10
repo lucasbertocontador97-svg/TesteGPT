@@ -22,7 +22,7 @@ from telegram.error import BadRequest, Conflict
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from .ai import analyze_game, analyze_live_game_without_odds, suggest_market_without_odds
-from .bfbm import BfbmConfig, alert_to_bfbm_row, debug_event_csv, debug_lab_csv, debug_minimal_csv, enrich_row_from_bfbm_catalog, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, full_rows_with_audit, rows_to_full_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
+from .bfbm import BfbmConfig, alert_to_bfbm_row, debug_event_csv, debug_lab_csv, debug_minimal_csv, enrich_row_from_bfbm_catalog, fresh_event_csv, fresh_match_odds_csv, fresh_match_odds_full_csv, fresh_match_odds_ids_csv, fresh_match_odds_rich_csv, fresh_test_csv, full_rows_with_audit, rows_to_full_csv, rows_to_tipster_csv, tips_clean_match_odds_csv, tips_csv, tips_full_csv, tips_rich_csv
 from .bfbm_markets import (
     _event_score,
     betfair_ingest_payload_to_markets,
@@ -2658,7 +2658,8 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                     storage.record_bfbm_export_audit(audits)
                 finally:
                     storage.close()
-                body = rows_to_full_csv(rows).encode("utf-8-sig")
+                serializer = rows_to_tipster_csv if parsed.path == "/bfbm/profissional.csv" else rows_to_full_csv
+                body = serializer(rows).encode("utf-8-sig")
             elif parsed.path == "/bfbm/live-rich.csv":
                 body = tips_rich_csv(alerts, config, catalog_rows).encode("utf-8-sig")
             elif parsed.path == "/bfbm/live-clean.csv":

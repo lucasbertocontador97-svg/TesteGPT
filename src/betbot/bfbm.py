@@ -38,6 +38,25 @@ BFBM_COLUMNS = [
     "BSP",
 ]
 
+BFBM_TIPSTER_COLUMNS = [
+    "Provider",
+    "EventTime",
+    "Sport",
+    "Competition",
+    "EventName",
+    "MarketName",
+    "SelectionName",
+    "BetType",
+    "Price",
+    "MinPrice",
+    "MaxPrice",
+    "Stake",
+    "Points",
+    "EventId",
+    "MarketId",
+    "SelectionId",
+]
+
 BFBM_ACCEPTED_COLUMNS = ["Provider", "SelectionName", "MarketType", "EventName", "BetType", "Size"]
 BFBM_RICH_COLUMNS = [
     "Provider",
@@ -389,6 +408,7 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
         "MaxPrice": "100.00" if is_match_odds else f"{config.max_price:.2f}",
         "BSP": "False",
         "__line": market.get("__line", ""),
+        "__competition": str(alert.get("league") or alert.get("competition") or "Football"),
     }
     return row
 
@@ -831,6 +851,41 @@ def rows_to_full_csv(rows: list[dict[str, str]]) -> str:
         if key in seen:
             continue
         seen.add(key)
+        writer.writerow(row)
+    return buffer.getvalue()
+
+
+def rows_to_tipster_csv(rows: list[dict[str, str]]) -> str:
+    """Serialize the exact 16-column contract used by BFBM tipster feeds."""
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=BFBM_TIPSTER_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    seen: set[tuple[str, str, str]] = set()
+    for source in rows:
+        key = tuple(str(source.get(name) or "").strip() for name in ("EventId", "MarketId", "SelectionId"))
+        if key in seen:
+            continue
+        seen.add(key)
+        start_time = str(source.get("StartTime") or "").strip()
+        event_time = start_time.replace("T", " ").replace(".000Z", "").replace("Z", "")
+        row = {
+            "Provider": source.get("Provider", ""),
+            "EventTime": event_time,
+            "Sport": "Football",
+            "Competition": source.get("__competition", "Football"),
+            "EventName": source.get("EventName", ""),
+            "MarketName": source.get("MarketName", ""),
+            "SelectionName": source.get("SelectionName", ""),
+            "BetType": source.get("BetType", "BACK"),
+            "Price": source.get("Price", ""),
+            "MinPrice": source.get("MinPrice", ""),
+            "MaxPrice": source.get("MaxPrice", ""),
+            "Stake": source.get("Size", ""),
+            "Points": source.get("Points", "1"),
+            "EventId": source.get("EventId", ""),
+            "MarketId": source.get("MarketId", ""),
+            "SelectionId": source.get("SelectionId", ""),
+        }
         writer.writerow(row)
     return buffer.getvalue()
 
