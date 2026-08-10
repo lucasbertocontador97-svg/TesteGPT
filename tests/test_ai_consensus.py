@@ -1,10 +1,16 @@
 from types import SimpleNamespace
 import unittest
 
-from betbot.main import _ai_confirms_signal, _alert_has_ai_consensus
+from betbot.main import _ai_confirms_signal, _alert_has_ai_consensus, _strict_live_bfbm_export_alerts
 
 
 class AiConsensusTests(unittest.TestCase):
+
+    def test_live_feed_never_falls_back_to_stored_tip(self):
+        stored = {"analysis_json": '{"final_decision":{"ai_checked":true}}'}
+        self.assertEqual(_strict_live_bfbm_export_alerts([], limit=10), [])
+        self.assertNotIn(stored, _strict_live_bfbm_export_alerts([], limit=10))
+
     def test_rejects_when_ai_vetoes(self):
         idea = SimpleNamespace(
             should_check_odds=False,

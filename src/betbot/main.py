@@ -1027,6 +1027,11 @@ def _merge_bfbm_export_alerts(
     return merged
 
 
+def _strict_live_bfbm_export_alerts(live_alerts: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    """Export only candidates revalidated in the current live cycle."""
+    return _merge_bfbm_export_alerts(live_alerts, [], limit=limit)
+
+
 async def build_live_bfbm_candidate_alerts(settings, limit: int = 12) -> list[dict[str, Any]]:
     if not settings.bfbm_export or not settings.totalcorner_token:
         return []
@@ -2579,8 +2584,9 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 }
                 if live_candidates_enabled:
                     live_alerts = asyncio.run(build_live_bfbm_candidate_alerts_cached(settings, limit=tips_limit))
-                    if live_alerts:
-                        alerts = _merge_bfbm_export_alerts(live_alerts, alerts, limit=tips_limit)
+                    # Fail closed: stored tips may already be invalid after a
+                    # score, minute, statistics or market-status change.
+                    alerts = _strict_live_bfbm_export_alerts(live_alerts, limit=tips_limit)
                 rows, audits = full_rows_with_audit(
                     alerts,
                     config,
