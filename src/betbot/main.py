@@ -369,6 +369,12 @@ def _catalog_runners_for_force(market: dict[str, Any]) -> list[dict[str, Any]]:
     return [runner for runner in runners if isinstance(runner, dict)]
 
 
+def _catalog_market_is_inplay(market: dict[str, Any]) -> bool:
+    """Trust only Betfair's explicit live flag; never infer live from OPEN/time."""
+    book = _catalog_raw_dict(market).get("book")
+    return isinstance(book, dict) and book.get("inplay") is True
+
+
 def _catalog_runner_price(runner: dict[str, Any]) -> float | None:
     for key in ("bestBackPrice", "best_back_price", "back", "lastPriceTraded", "last_price_traded"):
         value = runner.get(key)
@@ -2363,6 +2369,8 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                     family = row_market_family(market)
                     if family not in requested:
                         continue
+                    if not _catalog_market_is_inplay(market):
+                        continue
                     event_id = str(market.get("event_id") or "").strip()
                     market_id = str(market.get("market_id") or "").strip()
                     event_name = str(market.get("event_name") or "").strip()
@@ -2640,6 +2648,9 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                     parsed.path,
                     allow_name_fallback=not require_ids,
                 )
+                if test_catalog_enabled:
+                    for row in rows:
+                        row["Size"] = ""
                 storage = Storage(settings.database_path)
                 try:
                     storage.record_bfbm_export_audit(audits)
