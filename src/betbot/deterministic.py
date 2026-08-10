@@ -43,6 +43,24 @@ def _sum_stat(stats: dict[str, Any], names: tuple[str, ...]) -> float:
     return total
 
 
+def _strict_sum_stat(stats: dict[str, Any], names: tuple[str, ...]) -> float | None:
+    """Sum a real provider metric, failing closed when either side is absent."""
+    wanted = {name.lower() for name in names}
+    teams = [values for values in stats.values() if isinstance(values, dict)]
+    if len(teams) < 2:
+        return None
+    total = 0.0
+    for team_stats in teams[:2]:
+        matches = [value for key, value in team_stats.items() if str(key).lower() in wanted]
+        if not matches:
+            return None
+        value = _num(matches[0])
+        if value is None or value < 0:
+            return None
+        total += value
+    return total
+
+
 def _poisson_at_least(mean: float, needed: int) -> float:
     if needed <= 0:
         return 1.0
@@ -157,11 +175,10 @@ def _has_market_line(available_markets: list[tuple[str, float | None]] | None, f
     )
 
 
-def _effective_pressure(dangerous: float, attacks: float, total_shots: float, shots_on: float) -> tuple[float, str]:
-    if dangerous > 0:
-        return dangerous, f"ataques perigosos {dangerous:g}"
-    estimated = min(80.0, attacks * 0.35 + total_shots * 1.8 + shots_on * 3.0)
-    return estimated, f"pressao estimada {estimated:g} por ataques {attacks:g}, chutes {total_shots:g}, no gol {shots_on:g}"
+def _effective_pressure(dangerous: float | None) -> tuple[float, str]:
+    if dangerous is None:
+        return 0.0, "ataques perigosos indisponiveis"
+    return dangerous, f"ataques perigosos reais {dangerous:g}"
 
 
 def _goal_lambda_to(minute: int, current_goals: int, total_shots: float, shots_on: float, dangerous: float, end_minute: int) -> float:
@@ -720,14 +737,29 @@ def evaluate_game(
         return DeterministicSignal(False, "none", "none", None, 0, 0, 0, "Fora da janela operacional.", "time_filter")
 
     current_goals = int(score_home) + int(score_away)
-    shots_on = _sum_stat(stats, ("Shots on Goal", "Shots on target"))
-    total_shots = _sum_stat(stats, ("Total Shots",))
-    dangerous = _sum_stat(stats, ("Dangerous Attacks",))
-    attacks = _sum_stat(stats, ("Attacks",))
-    corners = _sum_stat(stats, ("Corner Kicks", "Corners"))
-    pressure, pressure_label = _effective_pressure(dangerous, attacks, total_shots, shots_on)
+    required = {
+        "chutes": _strict_sum_stat(stats, ("Total Shots",)),
+        "chutes no gol": _strict_sum_stat(stats, ("Shots on Goal", "Shots on target")),
+        "escanteios": _strict_sum_stat(stats, ("Corner Kicks", "Corners")),
+    }
+    missing = [name for name, value in required.items() if value is None]
+    if missing:
+        return DeterministicSignal(
+            False, "none", "none", None, 0, 0, 0,
+            f"Dados reais incompletos: {', '.join(missing)}.",
+            "missing_real_data",
+        )
+    total_shots = float(required["chutes"])
+    shots_on = float(required["chutes no gol"])
+    corners = float(required["escanteios"])
+    dangerous_value = _strict_sum_stat(stats, ("Dangerous Attacks",))
+    dangerous = float(dangerous_value) if dangerous_value is not None else None
+    attacks_value = _strict_sum_stat(stats, ("Attacks",))
+    attacks = float(attacks_value) if attacks_value is not None else 0.0
+    pressure, pressure_label = _effective_pressure(dangerous)
+    pressure_known = dangerous is not None
 
-    dead_game = _dead_game(minute, total_shots, shots_on, pressure)
+    dead_game = pressure_known and _dead_game(minute, total_shots, shots_on, pressure)
 
     candidates: list[DeterministicSignal] = []
 
@@ -818,7 +850,7 @@ def evaluate_game(
                 )
             )
 
-    if minute >= 60 and (dead_game or (total_shots <= 10 and shots_on <= 3 and pressure <= 45)):
+    if pressure_known and minute >= 60 and (dead_game or (total_shots <= 10 and shots_on <= 3 and pressure <= 45)):
         for line in goal_lines:
             if line <= current_goals or line > current_goals + 3.5:
                 continue
@@ -865,7 +897,7 @@ def evaluate_game(
                         "BTTS_YES_LIVE",
                     )
                 )
-        if not both_scored and minute >= 65 and (dead_game or (total_shots <= 10 and shots_on <= 3 and pressure <= 45)):
+        if pressure_known and not both_scored and minute >= 65 and (dead_game or (total_shots <= 10 and shots_on <= 3 and pressure <= 45)):
             prob_no_more_goal = _poisson_at_most(goal_mean, 0)
             score = round(prob_no_more_goal * 100)
             conviction = _btts_no_conviction(score, minute, total_shots, shots_on, pressure)

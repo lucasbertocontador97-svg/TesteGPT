@@ -188,39 +188,8 @@ def compact_sportdb_statistics(match: dict[str, Any], stats_response: dict[str, 
         if away_value is not None:
             result[away][name] = _sportdb_number(away_value)
 
-    for team in (home, away):
-        values = result[team]
-        shots = values.get("Total Shots") or 0
-        shots_on = values.get("Shots on Goal") or 0
-        corners = values.get("Corner Kicks") or 0
-        big_chances = values.get("Big Chances") or 0
-        touches_box = values.get("Touches in opposition box") or 0
-        inside_box = values.get("Shots inside the box") or 0
-        xg = values.get("Expected goals (xG)") or 0
-        final_third = values.get("Passes in final third") or 0
-        try:
-            has_pressure_signal = any(
-                float(value or 0) > 0
-                for value in (shots, shots_on, corners, big_chances, touches_box, inside_box, xg, final_third)
-            )
-            if has_pressure_signal and "Dangerous Attacks" not in values:
-                values["Dangerous Attacks"] = round(
-                    float(shots_on) * 3
-                    + float(shots) * 0.8
-                    + float(corners) * 1.2
-                    + float(big_chances) * 8
-                    + float(touches_box) * 0.7
-                      + float(inside_box) * 1.5
-                      + float(xg) * 10,
-                      1,
-                  )
-            if has_pressure_signal and "Attacks" not in values:
-                values["Attacks"] = round(
-                    float(final_third) if final_third else float(touches_box) * 4 + float(shots) * 3 + float(corners) * 4,
-                    1,
-                )
-        except (TypeError, ValueError):
-            pass
+    # Do not manufacture provider fields. Missing live metrics must remain
+    # missing so the decision engine can fail closed.
     return {team: values for team, values in result.items() if values}
 
 
@@ -337,32 +306,7 @@ def compact_sofascore_statistics(
         if away_value is not None:
             result[away][name] = _sofascore_number(away_value)
 
-    for team in (home, away):
-        values = result[team]
-        shots = values.get("Total Shots") or 0
-        shots_on = values.get("Shots on Goal") or 0
-        corners = values.get("Corner Kicks") or 0
-        big_chances = values.get("Big Chances") or 0
-        inside_box = values.get("Shots inside the box") or 0
-        xg = values.get("Expected goals (xG)") or 0
-        try:
-            has_pressure_signal = any(
-                float(value or 0) > 0 for value in (shots, shots_on, corners, big_chances, inside_box, xg)
-            )
-            if has_pressure_signal and "Dangerous Attacks" not in values:
-                values["Dangerous Attacks"] = round(
-                    float(shots_on) * 3
-                    + float(shots) * 0.8
-                    + float(corners) * 1.2
-                    + float(big_chances) * 8
-                    + float(inside_box) * 1.5
-                    + float(xg) * 10,
-                    1,
-                )
-            if has_pressure_signal and "Attacks" not in values:
-                values["Attacks"] = round(float(shots) * 3 + float(corners) * 4 + float(inside_box) * 2, 1)
-        except (TypeError, ValueError):
-            pass
+    # Preserve only values actually returned by SofaScore.
     return {team: values for team, values in result.items() if values}
 
 
@@ -461,31 +405,6 @@ def compact_sofascore_package(match: dict[str, Any], package: dict[str, Any]) ->
         team_stats.setdefault("Shots on Goal", values.get("on_target"))
         team_stats.setdefault("Expected goals (xG)", values.get("xg"))
 
-    # Recompute synthetic pressure after merging shotmap data.
-    for values in stats.values():
-        shots = values.get("Total Shots") or values.get("Shotmap Shots") or 0
-        shots_on = values.get("Shots on Goal") or values.get("Shotmap On Target") or 0
-        corners = values.get("Corner Kicks") or 0
-        big_chances = values.get("Big Chances") or 0
-        inside_box = values.get("Shots inside the box") or 0
-        xg = values.get("Expected goals (xG)") or values.get("Shotmap xG") or 0
-        try:
-            if any(float(value or 0) > 0 for value in (shots, shots_on, corners, big_chances, inside_box, xg)):
-                values["Dangerous Attacks"] = max(
-                    float(values.get("Dangerous Attacks") or 0),
-                    round(
-                        float(shots_on) * 3
-                        + float(shots) * 0.8
-                        + float(corners) * 1.2
-                        + float(big_chances) * 8
-                        + float(inside_box) * 1.5
-                        + float(xg) * 10,
-                        1,
-                    ),
-                )
-                values.setdefault("Attacks", round(float(shots) * 3 + float(corners) * 4 + float(inside_box) * 2, 1))
-        except (TypeError, ValueError):
-            continue
     return {team: values for team, values in stats.items() if values}
 
 

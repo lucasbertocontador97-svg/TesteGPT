@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -37,7 +38,7 @@ from .clients import ApiFootballClient, HttpJsonClient, OddsApiClient, SofaScore
 from .config import database_storage_status, load_settings, require_runtime_settings, require_telegram_settings, settings_presence
 from .deterministic import evaluate_game
 from .markets import flatten_all_markets, flatten_markets, market_matches_idea
-from .matching import find_matching_odds_event, find_matching_sofascore_match, find_matching_sportdb_match, find_matching_sportmonks_fixture, find_matching_thestatsapi_match, find_matching_totalcorner_match, sofascore_team_names, sportdb_team_names, sportmonks_participant_names
+from .matching import find_matching_odds_event, find_matching_sofascore_match, find_matching_sportdb_match, find_matching_sportmonks_fixture, find_matching_thestatsapi_match, find_matching_totalcorner_match, normalize_team, similarity, sofascore_team_names, sportdb_team_names, sportmonks_participant_names
 from .models import Decision, GameSnapshot
 from .settlement import settle_alert
 from .stats import compact_player_statistics, compact_sofascore_package, compact_sofascore_statistics, compact_sportdb_statistics, compact_sportmonks_statistics, compact_statistics, compact_stats_summary, compact_thestatsapi_statistics, compact_totalcorner_statistics, extract_minute, extract_score, has_actionable_stats, is_blocked_match_type, is_high_variance_match, stats_value, summarize_sofascore_package, total_stat
@@ -607,7 +608,8 @@ def _bfbm_market_cache_minutes(settings) -> int:
         minutes = int(raw_minutes)
     except (TypeError, ValueError):
         minutes = 240
-    return max(30, min(1440, minutes))
+    # Live decisions must never use a stale market snapshot.
+    return max(1, min(5, minutes))
 
 
 async def bfbm_totalcorner_overlap(settings) -> dict:
@@ -1182,6 +1184,102 @@ async def build_live_bfbm_candidate_alerts_cached(settings, limit: int = 12) -> 
     return alerts
 
 
+def _reserve_marker(name: str) -> str:
+    normalized = f" {normalize_team(name)} "
+    if re.search(r"\b(ii|2|b|u21|u23)\b", normalized):
+        return "reserve"
+    return "first"
+
+
+def _live_event_query_parts(query: str) -> tuple[str, str]:
+    parts = re.split(r"\s+(?:x|v|vs\.?|versus)\s+", query.strip(), maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) != 2:
+        return "", ""
+    return parts[0].strip(), parts[1].strip()
+
+
+def _live_match_query_score(query_home: str, query_away: str, match: dict[str, Any]) -> float:
+    home, away = sofascore_team_names(match)
+    if not query_home or not query_away or not home or not away:
+        return 0.0
+    direct_markers = _reserve_marker(query_home) == _reserve_marker(home) and _reserve_marker(query_away) == _reserve_marker(away)
+    swapped_markers = _reserve_marker(query_home) == _reserve_marker(away) and _reserve_marker(query_away) == _reserve_marker(home)
+    direct = (similarity(query_home, home) + similarity(query_away, away)) / 2 if direct_markers else 0.0
+    swapped = (similarity(query_home, away) + similarity(query_away, home)) / 2 if swapped_markers else 0.0
+    return max(direct, swapped)
+
+
+async def direct_live_game_analysis(settings, event_query: str) -> dict[str, Any]:
+    query_home, query_away = _live_event_query_parts(event_query)
+    if not query_home or not query_away:
+        return {"ok": False, "error": "Use event=Time A x Time B."}
+    if not settings.sofascore_api_key:
+        return {"ok": False, "error": "SOFASCORE_API_KEY nao configurada."}
+    http = HttpJsonClient()
+    try:
+        client = SofaScoreClient(settings.sofascore_api_key, http)
+        live = await client.live_matches(500)
+        ranked = sorted(
+            ((_live_match_query_score(query_home, query_away, match), match) for match in live),
+            key=lambda item: item[0], reverse=True,
+        )
+        if not ranked or ranked[0][0] < 0.78:
+            return {
+                "ok": False,
+                "error": "Partida nao encontrada com correspondencia segura na SofaScore/Zyla ao vivo.",
+                "live_matches_checked": len(live),
+            }
+        match_score, match = ranked[0]
+        match_id = _sofascore_match_id(match)
+        if not match_id:
+            return {"ok": False, "error": "Partida encontrada sem match_id real."}
+        package = await client.match_package(match_id)
+        stats = compact_sofascore_package(match, package)
+        summary = summarize_sofascore_package(match, package)
+        home, away = sofascore_team_names(match)
+        score_home, score_away = _sofascore_score(match)
+        minute = _sofascore_minute(match)
+        storage = Storage(settings.database_path)
+        try:
+            catalog = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
+        finally:
+            storage.close()
+        event_label = f"{home} x {away}"
+        available = bfbm_available_market_specs(catalog, event_label, min_score=75)
+        signal = evaluate_game(
+            minute=minute, score_home=score_home, score_away=score_away,
+            stats=stats, min_confidence=settings.min_confidence,
+            available_markets=available,
+        )
+        return {
+            "ok": True,
+            "source": "zyla_sofascore_direct",
+            "captured_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "match_score": round(match_score, 3),
+            "game": {
+                "match_id": match_id, "league": _sofascore_league_name(match),
+                "home": home, "away": away, "minute": minute,
+                "score_home": score_home, "score_away": score_away,
+            },
+            "stats": stats,
+            "coverage": summary.get("coverage", {}),
+            "incidents": summary.get("incidents", []),
+            "shotmap": summary.get("shotmap", {}),
+            "bfbm": {
+                "executable": bool(available),
+                "available_markets": [{"family": family, "line": line} for family, line in available],
+            },
+            "decision": {
+                "approved": signal.approved, "strategy": signal.strategy,
+                "market_family": signal.market_family, "selection": signal.selection,
+                "line": signal.line, "probability": signal.probability,
+                "confidence": signal.confidence, "reason": signal.reason,
+            },
+        }
+    finally:
+        await http.close()
+
+
 async def create_live_bfbm_zero_zero_goal_tests(settings, count: int = 4) -> tuple[int, list[str]]:
     http = HttpJsonClient()
     storage = Storage(settings.database_path)
@@ -1594,6 +1692,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/api/results/month",
             "/api/results/changes",
             "/api/results/diagnostics",
+            "/api/live-game",
             "/health",
         }:
             self.send_error(404)
@@ -1602,6 +1701,21 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"ok")
+            return
+        if parsed.path == "/api/live-game":
+            if not self._check_bfbm_token(settings, parsed):
+                return
+            query = parse_qs(parsed.query)
+            event_query = query.get("event", [""])[0].strip()
+            if not event_query:
+                self._write_json_response(400, {"ok": False, "error": "Parametro event obrigatorio."})
+                return
+            try:
+                data = asyncio.run(direct_live_game_analysis(settings, event_query))
+                self._write_json_response(200 if data.get("ok") else 404, data)
+            except Exception as exc:
+                logger.exception("Consulta direta SofaScore falhou")
+                self._write_json_response(502, {"ok": False, "error": type(exc).__name__})
             return
         if parsed.path == "/api/betfair/orders":
             if not self._check_results_api_key(settings, parsed):
