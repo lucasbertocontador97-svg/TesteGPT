@@ -868,15 +868,6 @@ def rows_to_tipster_csv(rows: list[dict[str, str]]) -> str:
         seen.add(key)
         start_time = str(source.get("StartTime") or "").strip()
         event_time = start_time.replace("T", " ").replace(".000Z", "").replace("Z", "")
-        if start_time:
-            try:
-                parsed_time = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-                if parsed_time.tzinfo is None:
-                    parsed_time = parsed_time.replace(tzinfo=timezone.utc)
-                sao_paulo = timezone(timedelta(hours=-3))
-                event_time = parsed_time.astimezone(sao_paulo).strftime("%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                pass
         row = {
             "Provider": source.get("Provider", ""),
             "EventTime": event_time,
