@@ -2599,7 +2599,22 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
             finally:
                 storage.close()
-            alerts = _only_ai_consensus_alerts(alerts)
+            test_catalog_enabled = str(query.get("test_catalog", [""])[0]).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "sim",
+            }
+            if test_catalog_enabled:
+                # Explicit, opt-in matching test. The normal Profissional feed
+                # remains fail-closed and never exports forced catalog tips.
+                alerts = [
+                    alert
+                    for alert in alerts
+                    if str(alert.get("strategy") or "").strip().upper() == "BFBM_CATALOG_FORCE"
+                ]
+            else:
+                alerts = _only_ai_consensus_alerts(alerts)
             if parsed.path in {"/bfbm/live-full.csv", "/bfbm/profissional.csv", "/bfbm/tips.csv"}:
                 require_ids = str(query.get("ids", [""])[0]).strip().lower() in {"1", "true", "yes", "sim"} or str(
                     query.get("require_ids", [""])[0]
@@ -2612,7 +2627,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                     "nao",
                     "não",
                 }
-                if live_candidates_enabled:
+                if live_candidates_enabled and not test_catalog_enabled:
                     live_alerts = asyncio.run(build_live_bfbm_candidate_alerts_cached(settings, limit=tips_limit))
                     # Fail closed: stored tips may already be invalid after a
                     # score, minute, statistics or market-status change.
