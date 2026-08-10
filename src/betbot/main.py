@@ -2595,7 +2595,14 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, format: str, *args: object) -> None:
-        logger.info("BFBM HTTP: " + format, *args)
+        message = format % args
+        message = re.sub(
+            r"([?&](?:token|api_key)=)[^&\s\"]+",
+            r"\1[REDACTED]",
+            message,
+            flags=re.IGNORECASE,
+        )
+        logger.info("BFBM HTTP: %s", message)
 
 
 def start_bfbm_server(settings) -> None:
