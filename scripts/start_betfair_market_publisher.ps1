@@ -23,6 +23,10 @@ $Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $Python)) {
     $Python = "$env:USERPROFILE\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
 }
+if (-not (Test-Path -LiteralPath $Python)) {
+    $PythonCommand = Get-Command python -ErrorAction Stop
+    $Python = $PythonCommand.Source
+}
 if (-not $env:BETFAIR_CERT_PATH) {
     $env:BETFAIR_CERT_PATH = "C:\BetfairCert\client-2048.crt"
 }
