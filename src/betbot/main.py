@@ -2365,12 +2365,15 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 for part in query.get("families", ["match_odds,goals,btts,double_chance"])[0].split(",")
                 if part.strip()
             ]
+            requested_event_id = str(query.get("event_id", [""])[0]).strip()
             force_any_status = query.get("any_status", ["0"])[0].strip() in {"1", "true", "yes"}
             storage = Storage(settings.database_path)
             try:
                 catalog_rows = storage.bfbm_markets(max_age_minutes=max(1, min(1440, max_age_minutes)))
                 candidates: list[tuple[dict[str, Any], dict[str, Any], float, str]] = []
                 for market in catalog_rows:
+                    if requested_event_id and str(market.get("event_id") or "").strip() != requested_event_id:
+                        continue
                     family = row_market_family(market)
                     if family not in requested:
                         continue
