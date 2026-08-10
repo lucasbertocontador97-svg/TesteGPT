@@ -2599,7 +2599,8 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
             finally:
                 storage.close()
-            test_catalog_enabled = str(query.get("test_catalog", [""])[0]).strip().lower() in {
+            test_catalog_default = os.getenv("BFBM_CATALOG_TEST_MODE", "")
+            test_catalog_enabled = str(query.get("test_catalog", [test_catalog_default])[0]).strip().lower() in {
                 "1",
                 "true",
                 "yes",
