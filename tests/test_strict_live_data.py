@@ -91,6 +91,29 @@ class StrictLiveDataTests(unittest.TestCase):
     def test_live_candidate_cache_is_never_over_thirty_seconds(self) -> None:
         self.assertLessEqual(_bfbm_live_alert_cache_seconds(), 30)
 
+    def test_btts_yes_rejects_one_sided_pressure(self) -> None:
+        stats = {
+            "Casa": {"Total Shots": 15, "Shots on Goal": 7, "Corner Kicks": 6, "Dangerous Attacks": 70},
+            "Fora": {"Total Shots": 1, "Shots on Goal": 0, "Corner Kicks": 0, "Dangerous Attacks": 5},
+        }
+        signal = evaluate_game(
+            minute=55, score_home=1, score_away=0, stats=stats, min_confidence=70,
+            available_markets=[("btts", None)],
+        )
+        self.assertFalse(signal.approved)
+
+    def test_btts_yes_can_use_strong_direct_evidence_without_dangerous_attacks(self) -> None:
+        stats = {
+            "Casa": {"Total Shots": 9, "Shots on Goal": 4, "Corner Kicks": 3},
+            "Fora": {"Total Shots": 8, "Shots on Goal": 3, "Corner Kicks": 2},
+        }
+        signal = evaluate_game(
+            minute=55, score_home=1, score_away=0, stats=stats, min_confidence=70,
+            available_markets=[("btts", None)],
+        )
+        self.assertTrue(signal.approved)
+        self.assertEqual(signal.market_family, "btts")
+
 
 if __name__ == "__main__":
     unittest.main()

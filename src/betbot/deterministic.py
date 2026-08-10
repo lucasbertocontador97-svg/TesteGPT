@@ -61,6 +61,36 @@ def _strict_sum_stat(stats: dict[str, Any], names: tuple[str, ...]) -> float | N
     return total
 
 
+def _strict_team_values(stats: dict[str, Any], names: tuple[str, ...]) -> list[float] | None:
+    """Return one real provider value per side, preserving team asymmetry."""
+    wanted = {name.lower() for name in names}
+    teams = [values for values in stats.values() if isinstance(values, dict)]
+    if len(teams) < 2:
+        return None
+    result: list[float] = []
+    for team_stats in teams[:2]:
+        matches = [value for key, value in team_stats.items() if str(key).lower() in wanted]
+        if not matches:
+            return None
+        value = _num(matches[0])
+        if value is None or value < 0:
+            return None
+        result.append(value)
+    return result
+
+
+def _btts_both_sides_have_real_threat(
+    team_shots: list[float],
+    team_shots_on: list[float],
+    team_dangerous: list[float] | None,
+) -> bool:
+    if team_dangerous is not None:
+        return min(team_shots) >= 4 and min(team_shots_on) >= 1 and min(team_dangerous) >= 20
+    # Without real dangerous-attacks data, compensate with stronger direct
+    # evidence from both teams. Never estimate the missing pressure metric.
+    return min(team_shots) >= 5 and min(team_shots_on) >= 2
+
+
 def _poisson_at_least(mean: float, needed: int) -> float:
     if needed <= 0:
         return 1.0
@@ -558,6 +588,7 @@ def _bfbm_executable_candidates(
     goal_mean: float,
     min_confidence: int,
     dead_game: bool,
+    btts_both_sides_ok: bool,
 ) -> list[DeterministicSignal]:
     """Practical BFBM-only fallback: only uses markets already present with Betfair ids."""
     if available_markets is None:
@@ -638,7 +669,7 @@ def _bfbm_executable_candidates(
     if _has_market_family(available_markets, "btts") and 38 <= minute <= 82:
         both_scored = score_home > 0 and score_away > 0
         one_side_blank = (score_home == 0) != (score_away == 0)
-        if one_side_blank and (total_shots >= 8 or shots_on >= 3 or pressure >= 40):
+        if one_side_blank and btts_both_sides_ok:
             prob = _poisson_at_least(goal_mean, 1)
             score = round(prob * 100)
             conviction = _btts_yes_conviction(score, minute, current_goals, total_shots, shots_on, pressure)
@@ -762,6 +793,14 @@ def evaluate_game(
     attacks = float(attacks_value) if attacks_value is not None else 0.0
     pressure, pressure_label = _effective_pressure(dangerous)
     pressure_known = dangerous is not None
+    team_shots = _strict_team_values(stats, ("Total Shots",)) or []
+    team_shots_on = _strict_team_values(stats, ("Shots on Goal", "Shots on target")) or []
+    team_dangerous = _strict_team_values(stats, ("Dangerous Attacks",))
+    btts_both_sides_ok = bool(
+        len(team_shots) == 2
+        and len(team_shots_on) == 2
+        and _btts_both_sides_have_real_threat(team_shots, team_shots_on, team_dangerous)
+    )
 
     dead_game = pressure_known and _dead_game(minute, total_shots, shots_on, pressure)
 
@@ -881,7 +920,7 @@ def evaluate_game(
     if _has_market_family(available_markets, "btts"):
         both_scored = score_home > 0 and score_away > 0
         one_side_blank = (score_home == 0) != (score_away == 0)
-        if one_side_blank and 45 <= minute <= 78:
+        if one_side_blank and 45 <= minute <= 78 and btts_both_sides_ok:
             prob_other_scores = _poisson_at_least(goal_mean, 1)
             score = round(prob_other_scores * 100)
             conviction = _btts_yes_conviction(score, minute, current_goals, total_shots, shots_on, pressure)
@@ -1012,6 +1051,7 @@ def evaluate_game(
             goal_mean=goal_mean,
             min_confidence=min_confidence,
             dead_game=dead_game,
+            btts_both_sides_ok=btts_both_sides_ok,
         )
         if executable_candidates:
             return sorted(
