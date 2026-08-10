@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from betbot.deterministic import evaluate_game
+from betbot.bfbm import _corner_tip
 from betbot.main import _bfbm_live_alert_cache_seconds, _bfbm_tip_max_age_minutes, _live_match_query_score
 from betbot.stats import compact_sofascore_statistics
 
@@ -113,6 +114,18 @@ class StrictLiveDataTests(unittest.TestCase):
         )
         self.assertTrue(signal.approved)
         self.assertEqual(signal.market_family, "btts")
+
+    def test_first_half_corner_strategy_cannot_be_exported_as_full_match(self) -> None:
+        self.assertIsNone(_corner_tip({
+            "strategy": "CORNER_PLUS_05_HT", "line": 3.5, "selection": "over",
+        }))
+
+    def test_minute_38_never_generates_legacy_ht_corner_strategy(self) -> None:
+        signal = evaluate_game(
+            minute=38, score_home=0, score_away=0, stats=real_stats(), min_confidence=70,
+            available_markets=[("corners", 5.5)],
+        )
+        self.assertNotEqual(signal.strategy, "CORNER_PLUS_05_HT")
 
 
 if __name__ == "__main__":

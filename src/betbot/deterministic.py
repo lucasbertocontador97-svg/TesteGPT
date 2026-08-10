@@ -381,8 +381,6 @@ def _next_corner_conviction(
 
 
 def _next_corner_window(minute: int) -> tuple[str, float] | None:
-    if 37 <= minute <= 39:
-        return "CORNER_PLUS_05_HT", 0.55
     if 55 <= minute <= 70:
         return "CORNER_PRESSURE_2H", 0.62
     if 78 <= minute <= 85:

@@ -254,6 +254,11 @@ def _corner_tip(alert: dict[str, Any]) -> dict[str, str] | None:
     line = _num(alert.get("line"))
     if line is None:
         return None
+    strategy = str(alert.get("strategy") or "").upper()
+    if strategy.endswith("_HT") or "FIRST_HALF" in strategy:
+        # The current catalog has no distinct first-half-corners family.
+        # Never translate an HT strategy into a full-match corner market.
+        return None
     side = "Over" if str(alert.get("selection", "")).lower() == "over" else "Under"
     return {
         "MarketType": _corner_market_type(line) or "CORNER_ODDS",
