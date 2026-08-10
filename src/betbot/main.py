@@ -10,7 +10,7 @@ import re
 import sys
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -2728,7 +2728,7 @@ def _sofascore_minute(match: dict) -> int | None:
                 return parsed
         start_ts = _sofascore_int(time_info.get("currentPeriodStartTimestamp"))
         if start_ts:
-            elapsed = max(0, int((datetime.utcnow().timestamp() - start_ts) // 60))
+            elapsed = max(0, int((datetime.now(timezone.utc).timestamp() - start_ts) // 60))
             status = match.get("status") if isinstance(match.get("status"), dict) else {}
             description = str(status.get("description") or status.get("type") or "").casefold()
             if "2nd" in description or "second" in description or "2" == str(status.get("period") or ""):
@@ -4650,10 +4650,8 @@ def run_bot() -> None:
         )
     else:
         if settings.railway_service_id and not settings.allow_polling:
-            logger.warning(
-                "Railway detectado sem TELEGRAM_WEBHOOK_URL/RAILWAY_PUBLIC_DOMAIN. "
-                "Usando polling como fallback para manter o bot online. "
-                "Se aparecer Conflict/getUpdates, deixe somente uma instancia rodando ou configure webhook."
+            logger.info(
+                "Railway em polling sem TELEGRAM_WEBHOOK_URL; modo esperado quando BFBM_EXPORT ocupa a porta HTTP."
             )
         logger.info(
             "Iniciando Telegram via polling. Use TELEGRAM_WEBHOOK_URL para evitar conflitos de getUpdates."
