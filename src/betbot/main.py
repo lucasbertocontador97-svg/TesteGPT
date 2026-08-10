@@ -2658,8 +2658,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                     storage.record_bfbm_export_audit(audits)
                 finally:
                     storage.close()
-                serializer = rows_to_tipster_csv if parsed.path == "/bfbm/profissional.csv" else rows_to_full_csv
-                body = serializer(rows).encode("utf-8-sig")
+                body = rows_to_full_csv(rows).encode("utf-8-sig")
             elif parsed.path == "/bfbm/live-rich.csv":
                 body = tips_rich_csv(alerts, config, catalog_rows).encode("utf-8-sig")
             elif parsed.path == "/bfbm/live-clean.csv":
