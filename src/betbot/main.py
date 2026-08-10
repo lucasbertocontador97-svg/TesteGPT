@@ -1366,7 +1366,11 @@ async def create_live_bfbm_zero_zero_goal_tests(settings, count: int = 4) -> tup
 class BfbmRequestHandler(BaseHTTPRequestHandler):
     def _check_bfbm_token(self, settings, parsed) -> bool:
         token = parse_qs(parsed.query).get("token", [""])[0]
-        if settings.bfbm_token and token != settings.bfbm_token:
+        expected = settings.bfbm_feed_token if parsed.path == "/bfbm/profissional.csv" else settings.bfbm_token
+        if parsed.path == "/bfbm/profissional.csv" and not expected:
+            self.send_error(503, "BFBM_FEED_TOKEN not configured")
+            return False
+        if expected and not hmac.compare_digest(token, expected):
             self.send_error(403)
             return False
         return True
@@ -1709,6 +1713,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             "/bfbm/fresh-match-ids.csv",
             "/bfbm/fresh-match-rich.csv",
             "/bfbm/live-full.csv",
+            "/bfbm/profissional.csv",
             "/bfbm/live-rich.csv",
             "/bfbm/live-clean.csv",
             "/bfbm/debug-minimal.csv",
@@ -2595,7 +2600,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             finally:
                 storage.close()
             alerts = _only_ai_consensus_alerts(alerts)
-            if parsed.path in {"/bfbm/live-full.csv", "/bfbm/tips.csv"}:
+            if parsed.path in {"/bfbm/live-full.csv", "/bfbm/profissional.csv", "/bfbm/tips.csv"}:
                 require_ids = str(query.get("ids", [""])[0]).strip().lower() in {"1", "true", "yes", "sim"} or str(
                     query.get("require_ids", [""])[0]
                 ).strip().lower() in {"1", "true", "yes", "sim"}

@@ -44,6 +44,7 @@ class Settings:
     bfbm_export: bool
     bfbm_provider: str
     bfbm_token: str | None
+    bfbm_feed_token: str | None
     bfbm_sync_token: str | None
     bfbm_stake: float
     bfbm_min_price: float
@@ -110,6 +111,7 @@ def load_settings() -> Settings:
         bfbm_export=os.getenv("BFBM_EXPORT", "false").lower() in {"1", "true", "yes", "sim"},
         bfbm_provider=os.getenv("BFBM_PROVIDER", "TesteGPT"),
         bfbm_token=os.getenv("BFBM_TOKEN") or None,
+        bfbm_feed_token=os.getenv("BFBM_FEED_TOKEN") or None,
         bfbm_sync_token=os.getenv("BFBM_SYNC_TOKEN") or None,
         bfbm_stake=float(os.getenv("BFBM_STAKE", "0.58")),
         bfbm_min_price=float(os.getenv("BFBM_MIN_PRICE", "1.80")),
@@ -195,6 +197,7 @@ def settings_presence(settings: Settings) -> dict[str, bool]:
         "GAME_COOLDOWN_MINUTES": bool(settings.game_cooldown_minutes),
         "BFBM_EXPORT": settings.bfbm_export,
         "BFBM_TOKEN": bool(settings.bfbm_token),
+        "BFBM_FEED_TOKEN": bool(settings.bfbm_feed_token),
         "BFBM_MARKET_CACHE_MINUTES": settings.bfbm_market_cache_minutes,
         "BETFAIR_INGEST_TOKEN": bool(settings.betfair_ingest_token),
         "BETFAIR_CACHE_API_KEY": bool(settings.betfair_cache_api_key),
