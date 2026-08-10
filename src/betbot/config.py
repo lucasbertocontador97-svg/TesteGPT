@@ -114,7 +114,7 @@ def load_settings() -> Settings:
         bfbm_stake=float(os.getenv("BFBM_STAKE", "0.58")),
         bfbm_min_price=float(os.getenv("BFBM_MIN_PRICE", "1.80")),
         bfbm_max_price=float(os.getenv("BFBM_MAX_PRICE", "8.00")),
-        bfbm_max_tip_age_minutes=max(240, int(os.getenv("BFBM_MAX_TIP_AGE_MINUTES", "240"))),
+        bfbm_max_tip_age_minutes=max(1, min(5, int(os.getenv("BFBM_MAX_TIP_AGE_MINUTES", "5")))),
         bfbm_market_cache_minutes=max(1, min(5, int(os.getenv("BFBM_MARKET_CACHE_MINUTES", "5")))),
         betfair_ingest_token=os.getenv("BETFAIR_INGEST_TOKEN") or None,
         betfair_cache_api_key=os.getenv("BETFAIR_CACHE_API_KEY") or None,

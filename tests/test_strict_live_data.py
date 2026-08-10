@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from betbot.deterministic import evaluate_game
-from betbot.main import _live_match_query_score
+from betbot.main import _bfbm_live_alert_cache_seconds, _bfbm_tip_max_age_minutes, _live_match_query_score
 from betbot.stats import compact_sofascore_statistics
 
 
@@ -81,6 +81,15 @@ class StrictLiveDataTests(unittest.TestCase):
         )
         self.assertFalse(signal.approved)
         self.assertNotEqual(signal.strategy, "BFBM_EXECUTABLE_NEXT_GOAL")
+
+    def test_live_tip_age_is_hard_limited_to_five_minutes(self) -> None:
+        class Settings:
+            bfbm_max_tip_age_minutes = 240
+
+        self.assertEqual(_bfbm_tip_max_age_minutes(Settings()), 5)
+
+    def test_live_candidate_cache_is_never_over_thirty_seconds(self) -> None:
+        self.assertLessEqual(_bfbm_live_alert_cache_seconds(), 30)
 
 
 if __name__ == "__main__":

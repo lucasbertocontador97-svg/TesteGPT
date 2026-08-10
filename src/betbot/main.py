@@ -75,7 +75,17 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 
 
 def _bfbm_live_alert_cache_seconds() -> int:
-    return _env_int("BFBM_LIVE_ALERT_CACHE_SECONDS", 120, 30, 600)
+    return _env_int("BFBM_LIVE_ALERT_CACHE_SECONDS", 30, 10, 30)
+
+
+def _bfbm_tip_max_age_minutes(settings) -> int:
+    """Hard live-safety limit; old tips must never re-enter the BFBM feed."""
+    raw_minutes = getattr(settings, "bfbm_max_tip_age_minutes", 5)
+    try:
+        minutes = int(raw_minutes)
+    except (TypeError, ValueError):
+        minutes = 5
+    return max(1, min(5, minutes))
 
 
 def _sofascore_max_packages_per_cycle() -> int:
@@ -2550,7 +2560,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
             tips_limit = max(1, min(100, tips_limit))
             storage = Storage(settings.database_path)
             try:
-                alerts = storage.bfbm_tips(settings.bfbm_max_tip_age_minutes, limit=tips_limit)
+                alerts = storage.bfbm_tips(_bfbm_tip_max_age_minutes(settings), limit=tips_limit)
                 catalog_rows = storage.bfbm_markets(_bfbm_market_cache_minutes(settings))
             finally:
                 storage.close()
