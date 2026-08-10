@@ -880,7 +880,9 @@ def rows_to_tipster_csv(rows: list[dict[str, str]]) -> str:
             "Price": source.get("Price", ""),
             "MinPrice": source.get("MinPrice", ""),
             "MaxPrice": source.get("MaxPrice", ""),
-            "Stake": source.get("Size", ""),
+            # BFBM requires a numeric Stake in the CSV even when its strategy
+            # ignores tip stakes and calculates the real investment itself.
+            "Stake": "1.00",
             "Points": source.get("Points", "1"),
             "EventId": source.get("EventId", ""),
             "MarketId": source.get("MarketId", ""),
