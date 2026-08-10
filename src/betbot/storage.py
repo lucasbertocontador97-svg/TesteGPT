@@ -1097,6 +1097,7 @@ class Storage:
                 coalesce(nullif(b.settled_at, ''), a.settled_at, '') as settled_at,
                 coalesce(nullif(b.placed_at_iso, ''), nullif(b.placed_at, ''), b.created_at) as placed_at,
                 b.bet_id,
+                b.alert_id as direct_alert_id,
                 coalesce(b.alert_id, a.id, e.alert_id) as alert_id,
                 coalesce(nullif(b.market_id, ''), a.betfair_market_id, e.bfbm_market_id, '') as market_id,
                 coalesce(nullif(b.selection_id, ''), a.betfair_selection_id, e.bfbm_selection_id, '') as selection_id,
@@ -1273,7 +1274,9 @@ class Storage:
         usable_rows = [
             row
             for row in rows
-            if self._money_float(row.get("stake")) > 0 and str(row.get("result") or "").upper() in {"GREEN", "RED"}
+            if row.get("direct_alert_id") is not None
+            and self._money_float(row.get("stake")) > 0
+            and str(row.get("result") or "").upper() in {"GREEN", "RED"}
         ]
         buckets: dict[str, dict[str, Any]] = {}
         for row in usable_rows:
