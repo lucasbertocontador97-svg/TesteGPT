@@ -1278,6 +1278,9 @@ async def direct_live_game_analysis(settings, event_query: str) -> dict[str, Any
         }
     finally:
         await http.close()
+        # Let httpx/httpcore finish transport cleanup before asyncio.run()
+        # closes this request's short-lived event loop.
+        await asyncio.sleep(0.05)
 
 
 async def create_live_bfbm_zero_zero_goal_tests(settings, count: int = 4) -> tuple[int, list[str]]:
