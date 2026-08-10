@@ -66,6 +66,22 @@ class StrictLiveDataTests(unittest.TestCase):
         match = {"homeTeam": {"name": "Austin FC II"}, "awayTeam": {"name": "Sporting Kansas City II"}}
         self.assertGreaterEqual(_live_match_query_score("Aust FC II", "Sporting KC II", match), 0.78)
 
+    def test_full_match_next_goal_never_approves_first_half_request(self) -> None:
+        stats = {
+            "Casa": {"Total Shots": 5, "Shots on Goal": 1, "Corner Kicks": 2},
+            "Fora": {"Total Shots": 4, "Shots on Goal": 0, "Corner Kicks": 1},
+        }
+        signal = evaluate_game(
+            minute=30,
+            score_home=0,
+            score_away=0,
+            stats=stats,
+            min_confidence=80,
+            available_markets=[("goals", 0.5), ("first_half_goals", 0.5)],
+        )
+        self.assertFalse(signal.approved)
+        self.assertNotEqual(signal.strategy, "BFBM_EXECUTABLE_NEXT_GOAL")
+
 
 if __name__ == "__main__":
     unittest.main()

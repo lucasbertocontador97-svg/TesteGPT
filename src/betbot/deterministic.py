@@ -576,7 +576,11 @@ def _bfbm_executable_candidates(
         for line in goal_lines
         if line >= 0.5 and line <= 8.5 and _needed_over(current_goals, line) == 1
     ]
-    if next_goal_lines and 16 <= minute <= 86:
+    # Before half-time, a full-match over 0.5 is not an HT signal. Keep the
+    # families strictly separated so an executable FT market can never be
+    # presented as approval for first-half goals.
+    allow_full_match_next_goal = minute >= 46 or current_goals > 0
+    if next_goal_lines and 16 <= minute <= 86 and allow_full_match_next_goal:
         target_line = min(next_goal_lines)
         prob = _poisson_at_least(goal_mean, 1)
         score = round(prob * 100)
