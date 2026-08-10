@@ -233,6 +233,22 @@ def _ai_confirms_signal(idea, signal) -> bool:
     return abs(float(idea_line) - float(signal_line)) <= 0.01
 
 
+def _bfbm_signal_has_value(signal, odd: Any, minimum_edge: float = 0.03) -> tuple[bool, str]:
+    try:
+        price = float(str(odd).replace(",", "."))
+        probability = float(getattr(signal, "probability", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return False, "missing_real_price"
+    if price <= 1.0 or not (0.0 < probability < 1.0):
+        return False, "invalid_price_or_probability"
+    implied_probability = 1.0 / price
+    edge = probability - implied_probability
+    expected_return = probability * price - 1.0
+    if edge < minimum_edge or expected_return <= 0.0:
+        return False, f"no_value:edge={edge:.3f},ev={expected_return:.3f},price={price:.2f}"
+    return True, f"value_ok:edge={edge:.3f},ev={expected_return:.3f},price={price:.2f}"
+
+
 def _record_bfbm_candidate_audit(
     storage: Storage,
     game: GameSnapshot,
@@ -613,13 +629,8 @@ def _bfbm_totalcorner_live_limit(settings) -> int:
 
 
 def _bfbm_market_cache_minutes(settings) -> int:
-    raw_minutes = getattr(settings, "bfbm_market_cache_minutes", 240)
-    try:
-        minutes = int(raw_minutes)
-    except (TypeError, ValueError):
-        minutes = 240
     # Live decisions must never use a stale market snapshot.
-    return max(1, min(5, minutes))
+    return 1
 
 
 async def bfbm_totalcorner_overlap(settings) -> dict:
@@ -1124,12 +1135,26 @@ async def build_live_bfbm_candidate_alerts(settings, limit: int = 12) -> list[di
                 settings,
                 bfbm_market,
             )
+            has_value, value_reason = _bfbm_signal_has_value(signal, alert.get("odd"))
+            if not has_value:
+                _record_bfbm_candidate_audit(
+                    storage,
+                    game,
+                    signal,
+                    status="SKIPPED",
+                    reason=value_reason,
+                    bfbm_market=bfbm_market,
+                )
+                continue
             analysis = json.loads(str(alert.get("analysis_json") or "{}"))
             analysis["final_decision"] = {
                 "market_family": signal.market_family,
                 "selection": signal.selection,
                 "line": signal.line,
                 "confidence": max(signal.confidence, idea.confidence),
+                "probability": signal.probability,
+                "odd": alert.get("odd"),
+                "value_validation": value_reason,
                 "stake": idea.stake,
                 "reason": f"{signal.reason} IA: {idea.reason}",
                 "ai_checked": True,

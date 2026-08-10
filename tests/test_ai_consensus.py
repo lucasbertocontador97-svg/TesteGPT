@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 import unittest
 
-from betbot.main import _ai_confirms_signal, _alert_has_ai_consensus, _strict_live_bfbm_export_alerts
+from betbot.main import _ai_confirms_signal, _alert_has_ai_consensus, _bfbm_signal_has_value, _strict_live_bfbm_export_alerts
 
 
 class AiConsensusTests(unittest.TestCase):
@@ -50,6 +50,12 @@ class AiConsensusTests(unittest.TestCase):
         )
         signal = SimpleNamespace(market_family="btts", selection="yes", line=None)
         self.assertTrue(_ai_confirms_signal(idea, signal))
+
+    def test_value_requires_real_positive_edge(self):
+        signal = SimpleNamespace(probability=0.60)
+        self.assertTrue(_bfbm_signal_has_value(signal, 2.00)[0])
+        self.assertFalse(_bfbm_signal_has_value(signal, 1.50)[0])
+        self.assertFalse(_bfbm_signal_has_value(signal, None)[0])
 
     def test_export_requires_explicit_ai_consensus(self):
         approved = {"analysis_json": '{"final_decision":{"ai_checked":true}}'}

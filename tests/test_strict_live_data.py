@@ -4,7 +4,7 @@ import unittest
 
 from betbot.deterministic import evaluate_game
 from betbot.bfbm import _corner_tip
-from betbot.main import _bfbm_live_alert_cache_seconds, _bfbm_tip_max_age_minutes, _live_match_query_score
+from betbot.main import _bfbm_live_alert_cache_seconds, _bfbm_market_cache_minutes, _bfbm_tip_max_age_minutes, _live_match_query_score
 from betbot.stats import compact_sofascore_statistics
 
 
@@ -91,6 +91,12 @@ class StrictLiveDataTests(unittest.TestCase):
 
     def test_live_candidate_cache_is_never_over_thirty_seconds(self) -> None:
         self.assertLessEqual(_bfbm_live_alert_cache_seconds(), 30)
+
+    def test_live_market_snapshot_is_never_older_than_one_minute(self) -> None:
+        class Settings:
+            bfbm_market_cache_minutes = 240
+
+        self.assertEqual(_bfbm_market_cache_minutes(Settings()), 1)
 
     def test_btts_yes_rejects_one_sided_pressure(self) -> None:
         stats = {

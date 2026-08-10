@@ -516,7 +516,7 @@ class TotalCornerClient:
     # gives the motor a useful pressure signal beyond score/corners.
     live_columns = "dangerousAttacks"
     live_cache_ttl_seconds = 45
-    live_stale_ttl_seconds = 600
+    live_stale_ttl_seconds = 60
     _inplay_cache: list[dict[str, Any]] = []
     _inplay_cache_ts: float = 0.0
 
