@@ -360,7 +360,8 @@ def alert_to_bfbm_row(alert: dict[str, Any], config: BfbmConfig) -> dict[str, st
     # Sem odd na origem, usamos a odd mínima configurada como preço-limite BACK.
     price_text = f"{price:.2f}" if price > 0 else f"{config.min_price:.2f}"
     is_match_odds = market.get("MarketType") == "MATCH_ODDS"
-    stake_text = "1.00" if is_match_odds else f"{config.stake:.2f}"
+    alert_stake = _num(alert.get("stake"))
+    stake_text = f"{alert_stake:.2f}" if alert_stake and alert_stake > 0 else f"{config.stake:.2f}"
     market_type_for_handicap = str(
         alert.get("bfbm_market_type")
         or alert.get("market_type")

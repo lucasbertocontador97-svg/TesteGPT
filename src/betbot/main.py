@@ -2355,6 +2355,11 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                 max_price = float(query.get("max_price", [str(settings.bfbm_max_price)])[0])
             except ValueError:
                 max_price = settings.bfbm_max_price
+            try:
+                test_stake = float(query.get("stake", [str(settings.bfbm_stake)])[0])
+            except ValueError:
+                test_stake = settings.bfbm_stake
+            test_stake = max(0.01, test_stake)
             requested = [
                 part.strip().lower()
                 for part in query.get("families", ["match_odds,goals,btts,double_chance"])[0].split(",")
@@ -2469,7 +2474,7 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                         price,
                         decision_line,
                         "TIP FORCADA DE CATALOGO: mercado real Betfair com IDs completos para validar BFBM.",
-                        "teste",
+                        f"{test_stake:.2f}",
                         f"bfbm-catalog-force|{stamp}|{market.get('market_id')}|{_catalog_runner_selection_id(runner)}",
                         strategy="BFBM_CATALOG_FORCE",
                     )
@@ -2648,9 +2653,6 @@ class BfbmRequestHandler(BaseHTTPRequestHandler):
                     parsed.path,
                     allow_name_fallback=not require_ids,
                 )
-                if test_catalog_enabled:
-                    for row in rows:
-                        row["Size"] = ""
                 storage = Storage(settings.database_path)
                 try:
                     storage.record_bfbm_export_audit(audits)
